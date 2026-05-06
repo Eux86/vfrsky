@@ -128,133 +128,6 @@ tbody tr:hover td{background:rgba(255,255,255,.02)}
 .mbtns{display:flex;gap:7px}
 .btn2{padding:5px 9px;font-size:.68rem;letter-spacing:2px}
 .btn-x{border-color:var(--dim);color:var(--dim)}
-
-/* ── MOBILE (preserva desktop) ── */
-body.mobile{height:auto;min-height:100vh;overflow:auto}
-body.mobile, body.mobile *{max-width:100%}
-body.mobile .hdr{
-  padding:8px 10px;
-  flex-wrap:wrap;
-  gap:7px;
-  overflow-x:hidden;
-}
-body.mobile .hdr-title{
-  font-size:.78rem;
-  letter-spacing:1.4px;
-  line-height:1.25;
-  min-width:0;
-  flex:1 1 100%;
-  overflow-wrap:anywhere;
-  word-break:break-word;
-}
-body.mobile .hdr-right{
-  width:100%;
-  margin-left:0;
-  min-width:0;
-}
-body.mobile .tab-btn{
-  flex:1;
-  padding:7px 6px;
-  font-size:.58rem;
-  letter-spacing:1px;
-  min-width:0;
-}
-body.mobile .layout{
-  flex-direction:column;
-  overflow:visible;
-  min-width:0;
-}
-body.mobile .sidebar{
-  width:100%;
-  min-width:0;
-  border-right:none;
-  border-bottom:1px solid var(--border);
-  max-height:none;
-  overflow-x:hidden;
-  overflow-y:visible;
-}
-body.mobile .sidebar .field,
-body.mobile .sidebar .row2 .field{
-  min-width:0;
-  width:100%;
-}
-body.mobile .sidebar .row2{
-  flex-direction:column;
-  gap:6px;
-}
-body.mobile .sidebar input{
-  width:100%;
-}
-body.mobile .main{
-  min-height:66vh;
-  min-width:0;
-  overflow-x:hidden;
-}
-body.mobile .gramet-wrap{padding:7px}
-body.mobile #cvMain{height:310px}
-body.mobile .twrap{max-height:165px}
-body.mobile table{font-size:.52rem}
-body.mobile thead th,
-body.mobile tbody td{padding:3px 4px}
-
-@media (max-width:1024px){
-  html, body{
-    height:auto;
-    min-height:100vh;
-    overflow-x:hidden;
-    overflow-y:auto;
-  }
-  body *{
-    box-sizing:border-box;
-  }
-  body .layout{
-    flex-direction:column;
-    overflow:visible;
-    min-width:0;
-  }
-  body .sidebar{
-    width:100%;
-    min-width:0;
-    border-right:none;
-    border-bottom:1px solid var(--border);
-    max-height:none;
-    overflow-x:hidden;
-    overflow-y:visible;
-  }
-  body .sidebar .row2{
-    flex-direction:column;
-    gap:6px;
-  }
-  body .sidebar .field,
-  body .sidebar .row2 .field,
-  body .sidebar input{
-    width:100%;
-    min-width:0;
-    display:block;
-  }
-  body .hdr{
-    flex-wrap:wrap;
-    overflow-x:hidden;
-  }
-  body .hdr-title{
-    min-width:0;
-    flex:1 1 100%;
-    overflow-wrap:anywhere;
-    word-break:break-word;
-  }
-  body .hdr-right{
-    width:100%;
-    margin-left:0;
-    min-width:0;
-  }
-  body .tab-btn{
-    min-width:0;
-  }
-  body .main{
-    min-width:0;
-    overflow-x:hidden;
-  }
-}
 </style>
 </head>
 <body>
@@ -386,21 +259,6 @@ body.mobile tbody td{padding:3px 4px}
 <script>
 'use strict';
 
-function setupResponsiveLayout(){
-  const mobileMedia = window.matchMedia('(max-width: 1024px), (pointer: coarse)');
-  const applyDeviceClass = () => {
-    const ua = navigator.userAgent || '';
-    const isTouchUa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
-    const isMobile = mobileMedia.matches || isTouchUa;
-    document.body.classList.toggle('mobile', isMobile);
-  };
-  applyDeviceClass();
-  if (mobileMedia.addEventListener) mobileMedia.addEventListener('change', applyDeviceClass);
-  else mobileMedia.addListener(applyDeviceClass);
-  window.addEventListener('resize', applyDeviceClass);
-}
-setupResponsiveLayout();
-
 // ═══════════════════════════════════════════════════════════════════
 //  TABS
 // ═══════════════════════════════════════════════════════════════════
@@ -472,7 +330,7 @@ const DB={
   LPLZ:{n:'Lousã',                         lat:40.1422,lon:-8.2400,elv:654, t:'ad'},
   LPMI:{n:'Mirandela',                     lat:41.4703,lon:-7.2278,elv:1322,t:'ad'},
   LPMU:{n:'Mogadouro',                     lat:41.3944,lon:-6.6844,elv:2344,t:'ad'},
-  LPMN:{n:'Montalegre / Venda Nova',       lat:41.8036,lon:-7.7867,elv:1378,t:'ad'},
+  LPMN:{n:'Amendoeira',                 lat:38.4233,lon:-8.1631,elv:636,t:'ad'},
   LPSO:{n:'Ponte de Sôr',                  lat:39.2117,lon:-8.0578,elv:390, t:'ad'},
   LPPM:{n:'Portimão / Penina',             lat:37.1494,lon:-8.5839,elv:5,   t:'ad'},
   LPPN:{n:'Proença-a-Nova',                lat:39.7311,lon:-7.8747,elv:1335,t:'ad'},
