@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VFRSKY PORTUGAL - VERSÃO DE TESTE Carlos Costa</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@600;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#07090f;--panel:#0d1017;--border:#1a2535;
+  --green:#00e87a;--gdim:#007a40;
+  --amber:#f5a623;--red:#ff3b3b;--blue:#4da6ff;
+  --purple:#cc44ff;--dim:#3a4f62;--text:#a8bcd0;
+}
+body{font-family:'Share Tech Mono',monospace;background:var(--bg);color:var(--text);
+  height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── HEADER ── */
+.hdr{background:#0b1018;border-bottom:1px solid var(--gdim);
+  padding:7px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;z-index:100}
+.hdr-dot{width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px var(--green);animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.hdr-title{font-family:'Rajdhani',sans-serif;font-size:.95rem;font-weight:700;
+  color:var(--green);letter-spacing:3px;text-transform:uppercase}
+.hdr-right{margin-left:auto;display:flex;gap:6px}
+.tab-btn{background:transparent;border:1px solid var(--border);color:var(--dim);
+  padding:4px 12px;font-family:'Share Tech Mono',monospace;font-size:.62rem;
+  letter-spacing:2px;cursor:pointer;transition:all .15s}
+.tab-btn.active{border-color:var(--green);color:var(--green);background:rgba(0,232,122,.07)}
+
+/* ── LAYOUT ── */
+.layout{display:flex;flex:1;min-height:0;overflow:hidden}
+
+/* ── SIDEBAR ── */
+.sidebar{width:252px;min-width:252px;background:var(--panel);border-right:1px solid var(--border);
+  padding:11px;overflow-y:auto;display:flex;flex-direction:column;gap:9px}
+.sidebar::-webkit-scrollbar{width:3px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border)}
+.slbl{font-size:.52rem;color:var(--dim);letter-spacing:2px;text-transform:uppercase;
+  padding-bottom:4px;border-bottom:1px solid var(--border)}
+.field{display:flex;flex-direction:column;gap:3px}
+.field label{font-size:.52rem;color:var(--dim);letter-spacing:1px;text-transform:uppercase}
+.field input{background:#0c1219;border:1px solid var(--border);color:#d0e8ff;
+  padding:6px 9px;font-family:'Share Tech Mono',monospace;font-size:.86rem;
+  letter-spacing:2px;outline:none;width:100%;transition:border-color .15s,box-shadow .15s}
+.field input:focus{border-color:var(--green);box-shadow:0 0 0 2px rgba(0,232,122,.07)}
+.field input[type=text]{text-transform:uppercase}
+.row2{display:flex;gap:7px}.row2 .field{flex:1}
+.badge{font-size:.56rem;padding:3px 8px;border:1px solid rgba(0,232,122,.2);
+  color:var(--green);background:rgba(0,232,122,.04);display:none;line-height:1.5}
+.badge.ul{border-color:rgba(77,166,255,.3);color:var(--blue);background:rgba(77,166,255,.05)}
+.badge.apt{border-color:rgba(245,166,35,.25);color:var(--amber);background:rgba(245,166,35,.04)}
+
+.btn{background:transparent;border:1px solid var(--green);color:var(--green);
+  padding:8px;font-family:'Rajdhani',sans-serif;font-size:.8rem;font-weight:700;
+  letter-spacing:3px;text-transform:uppercase;cursor:pointer;width:100%;
+  position:relative;overflow:hidden;transition:all .15s}
+.btn:hover:not(:disabled){background:rgba(0,232,122,.09);box-shadow:0 0 12px rgba(0,232,122,.18)}
+.btn:disabled{border-color:var(--dim);color:var(--dim);cursor:not-allowed}
+.btn::before{content:'';position:absolute;top:0;left:-100%;width:100%;height:100%;
+  background:linear-gradient(90deg,transparent,rgba(0,232,122,.1),transparent);transition:left .4s}
+.btn:hover:not(:disabled)::before{left:100%}
+
+/* Score badge */
+.score-box{padding:8px;border-radius:2px;font-size:.72rem;text-align:center;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:2px}
+.score-ok{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.4);color:#22c55e}
+.score-warn{background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);color:#f59e0b}
+.score-bad{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.4);color:#ef4444}
+
+.stats{background:#0a1018;border:1px solid var(--border);padding:7px}
+.sr{display:flex;justify-content:space-between;padding:1px 0;font-size:.62rem}
+.sk{color:var(--dim)}.sv{color:var(--green);font-weight:bold}
+.warn{padding:6px 9px;font-size:.6rem;line-height:1.6;display:none;margin-top:2px}
+.warn-msa{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35);color:#ef4444}
+.warn-ice{background:rgba(0,200,130,.07);border:1px solid rgba(0,200,130,.3);color:#00e090}
+.warn-cb {background:rgba(255,100,100,.07);border:1px solid rgba(255,100,100,.3);color:#ff8080}
+
+.leg{display:flex;flex-direction:column;gap:1px}
+.li{display:flex;align-items:center;gap:6px;font-size:.56rem;color:var(--dim);padding:1px 0}
+.ls{width:18px;height:7px;border-radius:1px;flex-shrink:0}
+
+/* ── MAIN ── */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.sb{font-size:.63rem;padding:4px 11px;background:var(--panel);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:7px;flex-shrink:0}
+.sb.load{border-bottom-color:var(--amber);color:var(--amber)}
+.sb.err{border-bottom-color:var(--red);color:var(--red)}
+.sb.ok{border-bottom-color:var(--green);color:var(--green)}
+.sb-dot{width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
+.load .sb-dot{animation:blink .8s infinite}
+
+/* VIEWS */
+.view{flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden}
+.view.active{display:flex}
+
+/* GRAMET view */
+.gramet-wrap{flex:1;min-height:0;display:flex;flex-direction:column;gap:5px;padding:10px;overflow:hidden}
+canvas{display:block;width:100%;background:var(--bg);border:1px solid var(--border);flex-shrink:0}
+#cvMain{height:400px}
+.twrap{overflow-y:auto;flex-shrink:0;max-height:115px;border:1px solid var(--border);display:none}
+.twrap::-webkit-scrollbar{width:3px}
+.twrap::-webkit-scrollbar-thumb{background:var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.56rem}
+thead th{background:#0b1018;color:var(--dim);padding:3px 6px;text-align:left;
+  font-size:.49rem;letter-spacing:1px;position:sticky;top:0;border-bottom:1px solid var(--border)}
+tbody td{padding:2px 6px;border-bottom:1px solid var(--border)}
+tbody tr:hover td{background:rgba(255,255,255,.02)}
+
+/* MAP view */
+#map{flex:1;min-height:0}
+/* Leaflet dark tiles */
+.leaflet-tile-pane{filter:brightness(.85) saturate(.8) hue-rotate(180deg) invert(1)}
+.leaflet-control-attribution{display:none}
+
+/* MODAL */
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:9000;
+  display:none;align-items:center;justify-content:center}
+.mbg.open{display:flex}
+.modal{background:var(--panel);border:1px solid var(--gdim);padding:18px;
+  min-width:290px;max-width:360px;display:flex;flex-direction:column;gap:10px}
+.mtitle{font-family:'Rajdhani',sans-serif;color:var(--green);font-size:.88rem;
+  font-weight:700;letter-spacing:3px;text-transform:uppercase}
+.msub{font-size:.58rem;color:var(--dim);line-height:1.6}
+.msub b{color:#d0e8ff}
+.mbtns{display:flex;gap:7px}
+.btn2{padding:5px 9px;font-size:.68rem;letter-spacing:2px}
+.btn-x{border-color:var(--dim);color:var(--dim)}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="hdr">
+  <div class="hdr-dot"></div>
+  <span style="font-size:1.1rem;color:var(--green)">✈</span>
+  <span class="hdr-title">VFRSKY  Portugal GRAMET Versão Teste - Carlos Costa</span>
+  <div class="hdr-right">
+    <button class="tab-btn active" id="tab-gramet" onclick="switchTab('gramet')">📊 GRAMET</button>
+    <button class="tab-btn" id="tab-map" onclick="switchTab('map')">🗺 MAPA</button>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- ═══ SIDEBAR ═══ -->
+<div class="sidebar">
+  <div class="slbl">▸ Partida</div>
+  <div class="field">
+    <label>Código ICAO / ULM</label>
+    <input type="text" id="dep" maxlength="12" placeholder="LPCO" list="adlist" autocomplete="off" oninput="onBadge('dep')">
+  </div>
+  <div class="badge" id="dep-badge"></div>
+
+  <div class="slbl">▸ Chegada</div>
+  <div class="field">
+    <label>Código ICAO / ULM</label>
+    <input type="text" id="arr" maxlength="12" placeholder="LPVZ" list="adlist" autocomplete="off" oninput="onBadge('arr')">
+  </div>
+  <div class="badge" id="arr-badge"></div>
+  <datalist id="adlist"></datalist>
+
+  <div class="slbl">▸ Parâmetros</div>
+  <div class="field"><label>Hora Partida (UTC)</label>
+    <input type="time" id="deptime" value="10:00"></div>
+  <div class="row2">
+    <div class="field"><label>Vel. (kt)</label>
+      <input type="number" id="speed" value="100" min="40" max="500"></div>
+    <div class="field"><label>Alt. CRZ (ft)</label>
+      <input type="number" id="cruise" value="4500" min="500" max="25000" step="500"></div>
+  </div>
+  <button class="btn" id="calcBtn" onclick="doCalc()">▶ Calcular GRAMET</button>
+
+  <!-- Score -->
+  <div id="scoreBox" style="display:none" class="score-box">—</div>
+
+  <!-- Stats -->
+  <div id="statsWrap" style="display:none">
+    <div class="slbl">▸ Dados da Rota</div>
+    <div class="stats">
+      <div class="sr"><span class="sk">Distância</span><span class="sv" id="sDist">—</span></div>
+      <div class="sr"><span class="sk">ETE</span><span class="sv" id="sEte">—</span></div>
+      <div class="sr"><span class="sk">ETA (UTC)</span><span class="sv" id="sEta">—</span></div>
+      <div class="sr"><span class="sk">Máx. Terreno</span><span class="sv" id="sMaxT">—</span></div>
+      <div class="sr"><span class="sk">MSA (+1000ft)</span><span class="sv" id="sMsa">—</span></div>
+      <div class="sr"><span class="sk">Nível 0°C</span><span class="sv" id="sFz">—</span></div>
+      <div class="sr"><span class="sk">Score Rota</span><span class="sv" id="sScore">—</span></div>
+    </div>
+  </div>
+  <div class="warn warn-msa" id="warnMsa">⚠ CRZ abaixo da MSA — risco de colisão!</div>
+  <div class="warn warn-ice" id="warnIce">❄ Icing possível na CRZ!</div>
+  <div class="warn warn-cb"  id="warnCb">⛈ CAPE elevado — Cb/trovoada provável!</div>
+
+  <div class="slbl">▸ Legenda</div>
+  <div class="leg">
+    <div class="li"><div class="ls" style="background:linear-gradient(#4a2e10,#2d5a14,#1a3a08)"></div>Terreno (DEM SRTM)</div>
+    <div class="li"><div class="ls" style="background:rgba(160,165,195,.6)"></div>Nuvens baixas (St·Sc·Cu)</div>
+    <div class="li"><div class="ls" style="background:rgba(90,100,160,.5)"></div>Nuvens médias (Ac·As)</div>
+    <div class="li"><div class="ls" style="background:rgba(160,185,235,.25)"></div>Nuvens altas (Ci·Cs·Cc)</div>
+    <div class="li"><div class="ls" style="background:rgba(0,180,120,.28);border:1px dashed #00cc88"></div>Icing (-20°→0°C + humidade)</div>
+    <div class="li"><div class="ls" style="background:none;border:2px solid #ff3b3b"></div>Isotérmica 0°C</div>
+    <div class="li"><div class="ls" style="background:none;border:1px dashed #22cc66"></div>Isotérmicas ±10/20/30°C</div>
+    <div class="li"><div class="ls" style="background:none;border:2px solid var(--purple)"></div>Altitude Cruzeiro</div>
+    <div class="li"><div class="ls" style="background:none;border:2px dashed var(--red)"></div>MSA</div>
+    <div class="li"><span style="font-size:9px;color:#88aaff">╳barb</span><span style="margin-left:4px">Barbelas vento (kt)</span></div>
+  </div>
+</div><!-- /sidebar -->
+
+<!-- ═══ MAIN ═══ -->
+<div class="main">
+  <div class="sb" id="sb"><div class="sb-dot"></div>Introduza aeródromos e clique em Calcular GRAMET. Aceita ICAO, ULM ou lat,lon.</div>
+
+  <!-- GRAMET VIEW -->
+  <div class="view active" id="view-gramet">
+    <div class="gramet-wrap">
+      <canvas id="cvMain" height="400"></canvas>
+      <div class="twrap" id="tableWrap">
+        <table>
+          <thead><tr>
+            <th>PT</th><th>NM</th><th>UTC</th>
+            <th>NUVEM</th><th>NOME</th><th>BASE ft</th><th>COB %</th>
+            <th>VENTO kt</th><th>DIR</th><th>ICING</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAP VIEW -->
+  <div class="view" id="view-map">
+    <div id="map"></div>
+  </div>
+</div>
+
+</div><!-- /layout -->
+
+<!-- MODAL -->
+<div class="mbg" id="modal">
+  <div class="modal">
+    <div class="mtitle">⚠ Aeródromo não encontrado</div>
+    <div class="msub" id="msub"></div>
+    <div class="field"><label>Latitude decimal  (ex: 40.1561)</label>
+      <input type="number" id="m-lat" step="0.0001"></div>
+    <div class="field"><label>Longitude decimal  (ex: -8.4692)</label>
+      <input type="number" id="m-lon" step="0.0001"></div>
+    <div class="field"><label>Elevação pista (ft)</label>
+      <input type="number" id="m-elv" placeholder="0"></div>
+    <div class="mbtns">
+      <button class="btn btn2" onclick="modalOk()">✓ Confirmar</button>
+      <button class="btn btn2 btn-x" onclick="modalCancel()">✕ Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════════
+//  TABS
+// ═══════════════════════════════════════════════════════════════════
+function switchTab(t){
+  ['gramet','map'].forEach(v=>{
+    document.getElementById('view-'+v).classList.toggle('active',v===t);
+    document.getElementById('tab-'+v).classList.toggle('active',v===t);
+  });
+  if(t==='map'&&_map) setTimeout(()=>_map.invalidateSize(),50);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  LEAFLET MAP
+// ═══════════════════════════════════════════════════════════════════
+const _map = L.map('map',{zoomControl:true}).setView([39.5,-8],6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:18, attribution:''
+}).addTo(_map);
+let _routeLayer=null, _markers=[];
+
+function drawMapRoute(pts, depInfo, arrInfo){
+  if(_routeLayer) _map.removeLayer(_routeLayer);
+  _markers.forEach(m=>_map.removeLayer(m));
+  _markers=[];
+  const latlngs=pts.map(p=>[p.lat,p.lon]);
+  _routeLayer=L.polyline(latlngs,{color:'#00e87a',weight:2.5,opacity:.85}).addTo(_map);
+  _map.fitBounds(_routeLayer.getBounds(),{padding:[30,30]});
+  // Markers
+  const mkIcon=(label,col)=>L.divIcon({
+    html:`<div style="background:${col};color:#000;padding:2px 5px;font-size:10px;font-family:monospace;font-weight:bold;border-radius:3px;white-space:nowrap">${label}</div>`,
+    iconAnchor:[0,10], className:''
+  });
+  _markers.push(L.marker([depInfo.lat,depInfo.lon],{icon:mkIcon('▲ '+depInfo.key,'#f5a623')}).addTo(_map));
+  _markers.push(L.marker([arrInfo.lat,arrInfo.lon],{icon:mkIcon('▲ '+arrInfo.key,'#cc44ff')}).addTo(_map));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  BASE DE DADOS — fonte: cavok.pt / ANAC
+// ═══════════════════════════════════════════════════════════════════
+const DB={
+  // AEROPORTOS
+  LPPT:{n:'Lisboa / Humberto Delgado',     lat:38.7742,lon:-9.1342,elv:374, t:'apt'},
+  LPPR:{n:'Porto / Francisco Sá Carneiro', lat:41.2481,lon:-8.6814,elv:228, t:'apt'},
+  LPFR:{n:'Faro',                          lat:37.0144,lon:-7.9659,elv:24,  t:'apt'},
+  LPMA:{n:'Madeira / Cristiano Ronaldo',   lat:32.6979,lon:-16.7745,elv:190,t:'apt'},
+  LPLA:{n:'Lajes / Terceira',              lat:38.7618,lon:-27.0908,elv:180,t:'apt'},
+  LPPD:{n:'Ponta Delgada / João Paulo II', lat:37.7412,lon:-25.6979,elv:259,t:'apt'},
+  LPAZ:{n:'Santa Maria (Açores)',          lat:36.9714,lon:-25.1706,elv:308,t:'apt'},
+  LPPB:{n:'Porto Santo',                   lat:33.0734,lon:-16.3500,elv:299,t:'apt'},
+  LPHR:{n:'Horta / Faial',                 lat:38.5199,lon:-28.7159,elv:118,t:'apt'},
+  LPPI:{n:'Pico (Açores)',                 lat:38.5543,lon:-28.4413,elv:108,t:'apt'},
+  LPSJ:{n:'São Jorge (Açores)',            lat:38.6655,lon:-28.1758,elv:311,t:'apt'},
+  LPGR:{n:'Graciosa (Açores)',             lat:39.0922,lon:-28.0298,elv:86, t:'apt'},
+  LPFL:{n:'Flores (Açores)',               lat:39.4553,lon:-31.1318,elv:112,t:'apt'},
+  LPCR:{n:'Corvo (Açores)',                lat:39.6716,lon:-31.1136,elv:52, t:'apt'},
+  // AERÓDROMOS
+  LPBJ:{n:'Beja',                          lat:38.0796,lon:-7.9325,elv:636, t:'ad'},
+  LPBR:{n:'Braga / Palmeira',              lat:41.5869,lon:-8.4450,elv:243, t:'ad'},
+  LPBG:{n:'Bragança',                      lat:41.8567,lon:-6.7075,elv:2278,t:'ad'},
+  LPCS:{n:'Cascais / Tires',               lat:38.7256,lon:-9.3553,elv:326, t:'ad'},
+  LPCB:{n:'Castelo Branco',                lat:39.8483,lon:-7.4417,elv:1251,t:'ad'},
+  LPCH:{n:'Chaves',                        lat:41.7219,lon:-7.4628,elv:1195,t:'ad'},
+  LPCO:{n:'Coimbra / Cernache',            lat:40.1561,lon:-8.4692,elv:570, t:'ad'},
+  LPIN:{n:'Espinho',                       lat:40.9725,lon:-8.6450,elv:13,  t:'ad'},
+  LPEV:{n:'Évora',                         lat:38.5297,lon:-7.8919,elv:807, t:'ad'},
+  LPFA:{n:'Ferreira do Alentejo',          lat:38.0392,lon:-8.1042,elv:459, t:'ad'},
+  LPFC:{n:'Figueira dos Cavaleiros',       lat:38.0775,lon:-8.2358,elv:263, t:'ad'},
+  LPJF:{n:'Leiria / José Ferrinho',        lat:39.7822,lon:-8.8197,elv:139, t:'ad'},
+  LPLZ:{n:'Lousã',                         lat:40.1422,lon:-8.2400,elv:654, t:'ad'},
+  LPMI:{n:'Mirandela',                     lat:41.4703,lon:-7.2278,elv:1322,t:'ad'},
+  LPMU:{n:'Mogadouro',                     lat:41.3944,lon:-6.6844,elv:2344,t:'ad'},
+  LPMN:{n:'Amendoeira',                 lat:38.4233,lon:-8.1631,elv:636,t:'ad'},
+  LPSO:{n:'Ponte de Sôr',                  lat:39.2117,lon:-8.0578,elv:390, t:'ad'},
+  LPPM:{n:'Portimão / Penina',             lat:37.1494,lon:-8.5839,elv:5,   t:'ad'},
+  LPPN:{n:'Proença-a-Nova',                lat:39.7311,lon:-7.8747,elv:1335,t:'ad'},
+  LPSC:{n:'Santa Cruz / Torres Vedras',    lat:39.1236,lon:-9.3800,elv:161, t:'ad'},
+  LPSR:{n:'Santarém',                      lat:39.2086,lon:-8.6886,elv:30,  t:'ad'},
+  LPSE:{n:'Seia',                          lat:40.4533,lon:-7.6917,elv:1456,t:'ad'},
+  LPVR:{n:'Vila Real',                     lat:41.2756,lon:-7.7200,elv:1832,t:'ad'},
+  LPVL:{n:'Vilar de Luz / Maia',          lat:41.2792,lon:-8.5172,elv:773, t:'ad'},
+  LPVZ:{n:'Viseu',                         lat:40.7256,lon:-7.8892,elv:2061,t:'ad'},
+  // ULTRALEVES (cavok.pt / ANAC)
+  ALQUEIDAO: {n:'Alqueidão / Azambuja',         lat:39.0675,lon:-8.8061,elv:12,  t:'ul'},
+  ATOUGUIA:  {n:'Atouguia da Baleia / Peniche', lat:39.3481,lon:-9.3200,elv:30,  t:'ul'},
+  AZAMBUJA:  {n:'Azambuja',                      lat:39.0592,lon:-8.8264,elv:15,  t:'ul'},
+  BEJAUL:    {n:'Beja UL',                       lat:38.0603,lon:-7.8775,elv:617, t:'ul'},
+  BENAVENTE: {n:'Benavente',                     lat:38.9133,lon:-8.7858,elv:100, t:'ul'},
+  CABECBASTO:{n:'Cabeceiras de Basto',           lat:41.5556,lon:-7.9872,elv:2411,t:'ul'},
+  CABECOVACA:{n:'Cabeço da Vaca / Sabugal',      lat:40.3444,lon:-6.9800,elv:3117,t:'ul'},
+  CAMPINHO:  {n:'Campinho / Reguengos',          lat:38.3592,lon:-7.4658,elv:630, t:'ul'},
+  CASALINHO: {n:'Casalinho / Pombal',            lat:39.8864,lon:-8.6489,elv:250, t:'ul'},
+  CASARAO:   {n:'Casarão / Águeda',              lat:40.5492,lon:-8.4061,elv:304, t:'ul'},
+  CERVAL:    {n:'Cerval / Vila Meã',             lat:41.9750,lon:-8.6733,elv:141, t:'ul'},
+  FAIAS:     {n:'Faias (Montijo)',               lat:38.6878,lon:-8.7450,elv:135, t:'ul'},
+  LAGOS:     {n:'Lagos',                          lat:37.1219,lon:-8.6789,elv:15,  t:'ul'},
+  LAUNDOS:   {n:'S.Miguel de Laúndos / Póvoa',  lat:41.4486,lon:-8.7086,elv:262, t:'ul'},
+  LEZIRIAS:  {n:'Lezírias / Vila Franca Xira',  lat:38.9025,lon:-8.9369,elv:10,  t:'ul'},
+  PALMA:     {n:'Palma / Alcácer do Sal',        lat:38.5147,lon:-8.5761,elv:281, t:'ul'},
+  PEGOES:    {n:'Herdade Pontal / Pegões',       lat:38.7114,lon:-8.6100,elv:295, t:'ul'},
+  PIASLONGAS:{n:'Pias Longas (Ourém/Fátima)',    lat:39.5978,lon:-8.5672,elv:796, t:'ul'},
+  PRAIVERDE: {n:'Praia Verde / Eco Pista',       lat:37.1936,lon:-7.4722,elv:10,  t:'ul'},
+  TOJEIRA:   {n:'Tojeira / S.João das Lampas',  lat:38.8833,lon:-9.4275,elv:330, t:'ul'},
+  VALADAS:   {n:'Valadas / Ferreira do Zêzere',  lat:39.6819,lon:-8.2531,elv:1080,t:'ul'},
+  VALDONAS:  {n:'Valdonas / Tomar',              lat:39.5908,lon:-8.3714,elv:253, t:'ul'},
+  ZAMBUJEIRA:{n:'H.Zambujeira / Castro Verde',   lat:37.6708,lon:-8.1239,elv:723, t:'ul'},
+};
+
+// datalist
+(()=>{
+  const dl=document.getElementById('adlist');
+  Object.entries(DB).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{
+    const o=document.createElement('option');
+    o.value=k; o.textContent=k+' — '+v.n; dl.appendChild(o);
+  });
+})();
+
+function onBadge(id){
+  const raw=document.getElementById(id).value.trim().toUpperCase();
+  const box=document.getElementById(id+'-badge');
+  const v=DB[raw];
+  if(v){
+    box.className='badge '+(v.t==='ul'?'ul':v.t==='apt'?'apt':'');
+    box.innerHTML='<b>'+{apt:'AEROPORTO',ad:'AERÓDROMO',ul:'ULTRALEVE'}[v.t]+'</b> — '+v.n+' · '+v.elv+'ft';
+    box.style.display='block';
+  } else {
+    const ll=parseLL(document.getElementById(id).value);
+    if(ll){box.className='badge';box.innerHTML='<b>COORD</b> '+ll.lat.toFixed(4)+'N '+Math.abs(ll.lon).toFixed(4)+'W';box.style.display='block';}
+    else box.style.display='none';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  DEM EMBEBIDO — SRTM Portugal Continental  0.25° grid
+//  lat 42.25→36.75 (23 rows N→S)  lon -9.50→-6.00 (15 cols W→E)
+//  valores em METROS
+// ═══════════════════════════════════════════════════════════════════
+const DL0=42.25,DDLAT=0.25,DROWS=23;
+const DL1=-9.50,DDLON=0.25,DCOLS=15;
+const DEM=[
+/*42.25*/[  0,  0, 10, 30, 80,250,380,480,560,580,640,780,880,780,720],
+/*42.00*/[  0,  0,  5, 50,110,320,430,680,790,640,730,980,1070,880,790],
+/*41.75*/[  0,  0,  5, 20, 40,1300,680,730,580,540,640,790,880,980,880],
+/*41.50*/[  0,  0,  5, 30,200,1100,680,1070,780,590,840,880,940,790,740],
+/*41.25*/[  0,  0,  5, 15,100,790,1380,880,690,590,690,740,790,740,690],
+/*41.00*/[  0,  0,  5, 15, 80,240,590,790,740,590,640,690,740,690,640],
+/*40.75*/[  0,  0,  5, 15, 95,580,880,610,1071,880,790,740,790,740,690],
+/*40.50*/[  0,  0,  5, 10, 75,790,1071,1180,1670,1380,880,790,840,790,740],
+/*40.25*/[  0,  0,  5, 10, 95,790,1250,1750,1993,1480,1075,790,840,790,740],
+/*40.00*/[  0,  0,  5, 10, 95,1204,1380,980,880,790,690,640,690,640,590],
+/*39.75*/[  0,  0,  5, 10, 48,390,590,880,490,590,640,690,690,640,590],
+/*39.50*/[  0,  0,  5, 10, 48,190,390,590,490,690,590,640,690,640,590],
+/*39.25*/[  0,  0,  5, 10, 48,190,340,440,490,1025,690,640,690,640,590],
+/*39.00*/[  0,  0,660,195, 95,145,290,390,440,640,490,540,590,540,490],
+/*38.75*/[  0,440,295, 95, 75,145,245,340,440,490,440,490,540,490,440],
+/*38.50*/[  0,  0, 48, 48, 75,115,245,340,390,440,390,440,490,440,390],
+/*38.25*/[  0,  0,  0, 48, 95,145,195,290,340,390,340,390,440,390,340],
+/*38.00*/[  0,  0,  0, 19, 75,115,195,245,290,340,290,340,390,340,290],
+/*37.75*/[  0,  0,  0, 19, 95,145,195,245,270,310,270,310,370,330,290],
+/*37.50*/[  0,  0,  0, 10,195,290,340,290,270,290,270,290,340,310,270],
+/*37.25*/[  0,  0,  0, 48,902,590,580,440,340,340,310,340,390,360,310],
+/*37.00*/[  0,  0,  0, 95,390,340,390,290,245,215,195,245,290,260,215],
+/*36.75*/[  0,  0,  0, 48,130, 95, 60, 70,105,140,145,175,195,175,145],
+];
+function demElev(lat,lon){
+  lat=Math.max(36.75,Math.min(42.25,lat));
+  lon=Math.max(-9.50,Math.min(-6.00,lon));
+  const ri=(DL0-lat)/DDLAT, ci=(lon-DL1)/DDLON;
+  const r0=Math.min(Math.floor(ri),DROWS-2), dr=ri-r0;
+  const c0=Math.min(Math.floor(ci),DCOLS-2), dc=ci-c0;
+  return DEM[r0][c0]*(1-dr)*(1-dc)+DEM[r0][c0+1]*(1-dr)*dc
+        +DEM[r0+1][c0]*dr*(1-dc)+DEM[r0+1][c0+1]*dr*dc;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MATHS
+// ═══════════════════════════════════════════════════════════════════
+const D2R=Math.PI/180, R2D=180/Math.PI;
+function hvNm(a,b,c,d){
+  const R=3440.065,dl=(c-a)*D2R,dn=(d-b)*D2R;
+  const x=Math.sin(dl/2)**2+Math.cos(a*D2R)*Math.cos(c*D2R)*Math.sin(dn/2)**2;
+  return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function gcPts(a1,o1,a2,o2,n){
+  const pts=[];
+  for(let i=0;i<=n;i++){
+    const f=i/n, A1=a1*D2R,O1=o1*D2R,A2=a2*D2R,O2=o2*D2R;
+    const d=2*Math.asin(Math.sqrt(Math.sin((A2-A1)/2)**2+Math.cos(A1)*Math.cos(A2)*Math.sin((O2-O1)/2)**2));
+    if(d<1e-7){pts.push({lat:a1,lon:o1});continue;}
+    const A=Math.sin((1-f)*d)/Math.sin(d),B=Math.sin(f*d)/Math.sin(d);
+    const x=A*Math.cos(A1)*Math.cos(O1)+B*Math.cos(A2)*Math.cos(O2);
+    const y=A*Math.cos(A1)*Math.sin(O1)+B*Math.cos(A2)*Math.sin(O2);
+    const z=A*Math.sin(A1)+B*Math.sin(A2);
+    pts.push({lat:Math.atan2(z,Math.sqrt(x*x+y*y))*R2D,lon:Math.atan2(y,x)*R2D});
+  }
+  return pts;
+}
+function ft2hPa(ft){return 1013.25*Math.pow(1-ft*0.3048/44308,5.256);}
+function hPa2ft(p){return 44308*(1-Math.pow(p/1013.25,1/5.256))/0.3048;}
+function m2ft(m){return m*3.28084;}
+
+// ═══════════════════════════════════════════════════════════════════
+//  METEOROLOGIA — Open-Meteo (multi-level corrected)
+// ═══════════════════════════════════════════════════════════════════
+async function getWx(lat,lon,etaDt){
+  const vars=[
+    'temperature_925hPa','temperature_850hPa','temperature_700hPa',
+    'temperature_500hPa','temperature_300hPa',
+    'relativehumidity_850hPa','relativehumidity_700hPa','relativehumidity_500hPa',
+    'windspeed_925hPa','windspeed_850hPa','windspeed_700hPa','windspeed_500hPa','windspeed_300hPa',
+    'winddirection_925hPa','winddirection_850hPa','winddirection_700hPa','winddirection_500hPa','winddirection_300hPa',
+    'cloud_cover_low','cloud_cover_mid','cloud_cover_high',
+    'weather_code','cape','freezing_level_height','precipitation',
+    'temperature_2m','dew_point_2m','windspeed_10m','winddirection_10m'
+  ].join(',');
+  const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&hourly=${vars}&wind_speed_unit=kn&timezone=UTC&forecast_days=3`;
+  const r=await fetch(url);
+  if(!r.ok) throw 0;
+  const d=await r.json();
+  const tgt=etaDt.toISOString().slice(0,13);
+  let i=d.hourly.time.findIndex(t=>t===tgt); if(i<0)i=0;
+  const g=d.hourly;
+  const G=(k,def=0)=>(g[k]?.[i]??def);   // ← CORRIGIDO: acesso por índice
+  return{
+    T2m:G('temperature_2m',15),  Td2m:G('dew_point_2m',10),
+    T925:G('temperature_925hPa',12), T850:G('temperature_850hPa',8),
+    T700:G('temperature_700hPa',2),  T500:G('temperature_500hPa',-10),
+    T300:G('temperature_300hPa',-35),
+    RH850:G('relativehumidity_850hPa',60),
+    RH700:G('relativehumidity_700hPa',50),
+    RH500:G('relativehumidity_500hPa',40),
+    ws10:G('windspeed_10m'),      wd10:G('winddirection_10m',270),
+    ws925:G('windspeed_925hPa'),  wd925:G('winddirection_925hPa',270),
+    ws850:G('windspeed_850hPa'),  wd850:G('winddirection_850hPa',270),
+    ws700:G('windspeed_700hPa'),  wd700:G('winddirection_700hPa',270),
+    ws500:G('windspeed_500hPa'),  wd500:G('winddirection_500hPa',270),
+    ws300:G('windspeed_300hPa'),  wd300:G('winddirection_300hPa',270),
+    cL:G('cloud_cover_low'),      cM:G('cloud_cover_mid'),
+    cH:G('cloud_cover_high'),     wc:G('weather_code'),
+    cape:G('cape'),               fzM:G('freezing_level_height',2000),
+    precip:G('precipitation'),
+  };
+}
+const WX0={T2m:15,Td2m:10,T925:12,T850:8,T700:2,T500:-10,T300:-35,
+  RH850:60,RH700:50,RH500:40,
+  ws10:0,wd10:270,ws925:0,wd925:270,ws850:0,wd850:270,
+  ws700:0,wd700:270,ws500:0,wd500:270,ws300:0,wd300:270,
+  cL:0,cM:0,cH:0,wc:0,cape:0,fzM:2000,precip:0};
+
+function wxLevels(wx,elevFt){
+  return[
+    {altFt:Math.max(0,elevFt), T:wx.T2m,  RH:80},
+    {altFt:2467,               T:wx.T925, RH:70},
+    {altFt:4781,               T:wx.T850, RH:wx.RH850},
+    {altFt:9882,               T:wx.T700, RH:wx.RH700},
+    {altFt:18442,              T:wx.T500, RH:wx.RH500},
+    {altFt:30065,              T:wx.T300, RH:40},
+  ].filter(l=>l.altFt>=elevFt-100);
+}
+
+function windAtAlt(wx,altFt){
+  if(altFt<3500)  return{ws:wx.ws925,wd:wx.wd925};
+  if(altFt<7500)  return{ws:wx.ws850,wd:wx.wd850};
+  if(altFt<14000) return{ws:wx.ws700,wd:wx.wd700};
+  if(altFt<24000) return{ws:wx.ws500,wd:wx.wd500};
+  return{ws:wx.ws300,wd:wx.wd300};
+}
+
+function isoAlt(lvls,Ttgt){
+  for(let j=0;j<lvls.length-1;j++){
+    const l0=lvls[j],l1=lvls[j+1];
+    if((l0.T>=Ttgt&&l1.T<=Ttgt)||(l0.T<=Ttgt&&l1.T>=Ttgt)){
+      const t=(Ttgt-l0.T)/(l1.T-l0.T);
+      return l0.altFt+t*(l1.altFt-l0.altFt);
+    }
+  }
+  return null;
+}
+
+function getTatAlt(wx,altFt){
+  const lvls=wxLevels(wx,0);
+  for(let j=0;j<lvls.length-1;j++){
+    if(altFt>=lvls[j].altFt&&altFt<=lvls[j+1].altFt){
+      const t=(altFt-lvls[j].altFt)/(lvls[j+1].altFt-lvls[j].altFt);
+      return lvls[j].T+t*(lvls[j+1].T-lvls[j].T);
+    }
+  }
+  return null;
+}
+
+function midRH(wx,hPa){
+  if(hPa>875) return 80;
+  if(hPa>775) return wx.RH850;
+  if(hPa>600) return wx.RH700;
+  return wx.RH500;
+}
+
+function icingAtFt(wx,altFt){
+  const T=getTatAlt(wx,altFt);
+  if(T===null) return false;
+  const hPa=ft2hPa(altFt);
+  const rh=midRH(wx,hPa);
+  return T>=-20&&T<=0&&rh>60&&(wx.cL+wx.cM)>20;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  SCORE — baseado no código original mas com icing real e terreno
+// ═══════════════════════════════════════════════════════════════════
+function calcScore(wxList, crzFt, maxEF){
+  let s=100;
+  const avg=(key)=>wxList.reduce((a,w)=>a+(w[key]||0),0)/wxList.length;
+  const cL=avg('cL'), cM=avg('cM'), wsAvg=avg('ws850');
+  const hasIce=wxList.some(w=>icingAtFt(w,crzFt));
+  const hasCb=wxList.some(w=>w.cape>1000||(w.wc>=95));
+  const avgCape=avg('cape');
+  // Cloud penalties
+  if(cL>80) s-=35; else if(cL>60) s-=20; else if(cL>40) s-=10;
+  if(cM>60) s-=15; else if(cM>40) s-=8;
+  // Wind penalties
+  if(wsAvg>40) s-=30; else if(wsAvg>25) s-=15; else if(wsAvg>15) s-=5;
+  // Icing
+  if(hasIce) s-=25;
+  // Cb / Convection
+  if(hasCb) s-=30; else if(avgCape>500) s-=12;
+  // Terrain margin
+  const margin=crzFt-maxEF;
+  if(margin<500) s-=40; else if(margin<1000) s-=20; else if(margin<2000) s-=5;
+  return Math.max(0,Math.round(s));
+}
+
+// Interpolação met ao longo da rota
+function iWx(wxMap,wxKeys,i){
+  if(!wxKeys.length) return WX0;
+  if(i<=wxKeys[0]) return wxMap[wxKeys[0]];
+  if(i>=wxKeys[wxKeys.length-1]) return wxMap[wxKeys[wxKeys.length-1]];
+  let lo=wxKeys[0],hi=wxKeys[1];
+  for(let j=0;j<wxKeys.length-1;j++){
+    if(wxKeys[j]<=i&&i<=wxKeys[j+1]){lo=wxKeys[j];hi=wxKeys[j+1];break;}
+  }
+  const t=(i-lo)/(hi-lo), a=wxMap[lo], b=wxMap[hi];
+  const L=(x,y)=>x*(1-t)+y*t;
+  return{
+    T2m:L(a.T2m,b.T2m),Td2m:L(a.Td2m,b.Td2m),
+    T925:L(a.T925,b.T925),T850:L(a.T850,b.T850),
+    T700:L(a.T700,b.T700),T500:L(a.T500,b.T500),T300:L(a.T300,b.T300),
+    RH850:L(a.RH850,b.RH850),RH700:L(a.RH700,b.RH700),RH500:L(a.RH500,b.RH500),
+    ws10:L(a.ws10,b.ws10),wd10:L(a.wd10,b.wd10),
+    ws925:L(a.ws925,b.ws925),wd925:L(a.wd925,b.wd925),
+    ws850:L(a.ws850,b.ws850),wd850:L(a.wd850,b.wd850),
+    ws700:L(a.ws700,b.ws700),wd700:L(a.wd700,b.wd700),
+    ws500:L(a.ws500,b.ws500),wd500:L(a.wd500,b.wd500),
+    ws300:L(a.ws300,b.ws300),wd300:L(a.wd300,b.wd300),
+    cL:L(a.cL,b.cL),cM:L(a.cM,b.cM),cH:L(a.cH,b.cH),
+    wc:t<.5?a.wc:b.wc, cape:L(a.cape,b.cape),
+    fzM:L(a.fzM,b.fzM), precip:L(a.precip,b.precip),
+  };
+}
+
+function degToComp(d){return['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSO','SO','OSO','O','ONO','NO','NNO'][Math.round(d/22.5)%16];}
+
+// ═══════════════════════════════════════════════════════════════════
+//  DRAW GRAMET
+// ═══════════════════════════════════════════════════════════════════
+const P_BOT=1013, P_TOP=200;
+const PLEVS=[
+  {hPa:1013,lbl:'SFC'},{hPa:925,lbl:'FL025'},{hPa:850,lbl:'FL050'},
+  {hPa:700,lbl:'FL100'},{hPa:500,lbl:'FL180'},{hPa:300,lbl:'FL300'},
+];
+
+function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC){
+  const ctx=cv.getContext('2d');
+  const W=cv.width, H=cv.height;
+  const pL=72, pR=52, pT=36, pB=46;
+  const pw=W-pL-pR, ph=H-pT-pB;
+  const totNm=data[data.length-1].dist;
+
+  const X=d=>pL+(d/totNm)*pw;
+  const Yp=p=>pT+ph*(p-P_TOP)/(P_BOT-P_TOP);
+  const Yft=ft=>Yp(ft2hPa(Math.max(0,ft)));
+
+  // 1. Sky background
+  const hUTC=depUTC.getUTCHours();
+  const night=hUTC<6||hUTC>=20;
+  const sbg=ctx.createLinearGradient(0,pT,0,H-pB);
+  sbg.addColorStop(0,night?'#02030c':'#091830');
+  sbg.addColorStop(1,night?'#060a18':'#122848');
+  ctx.fillStyle=sbg; ctx.fillRect(pL,pT,pw,ph);
+
+  // 2. Cloud bands (per segment, opacity ∝ coverage)
+  const bands=[
+    {key:'cL',yTop:Yft(6500), yBotFn:(ef)=>Math.max(Yft(ef+200),Yft(500)), col:'rgba(160,165,195,'},
+    {key:'cM',yTop:Yft(23000),yBotFn:()=>Yft(6500),                         col:'rgba(90,100,160,'},
+    {key:'cH',yTop:Yft(42000),yBotFn:()=>Yft(23000),                        col:'rgba(155,180,235,'},
+  ];
+  for(const band of bands){
+    for(let i=0;i<data.length-1;i++){
+      const A=data[i],B=data[i+1];
+      const aA=A.wx[band.key]/100, aB=B.wx[band.key]/100;
+      if(aA<0.05&&aB<0.05) continue;
+      const alpha=((aA+aB)/2)*0.7;
+      const x1=X(A.dist),x2=X(B.dist);
+      const yBotA=band.yBotFn(A.ef), yBotB=band.yBotFn(B.ef);
+      ctx.beginPath();
+      ctx.moveTo(x1,yBotA); ctx.lineTo(x2,yBotB);
+      ctx.lineTo(x2,band.yTop); ctx.lineTo(x1,band.yTop);
+      ctx.closePath();
+      ctx.fillStyle=band.col+alpha+')'; ctx.fill();
+    }
+  }
+
+  // 3. Icing zones
+  const iceBands=[{hPa1:1013,hPa2:850},{hPa1:850,hPa2:700},{hPa1:700,hPa2:500}];
+  for(const ib of iceBands){
+    const y1=Yp(ib.hPa1), y2=Yp(ib.hPa2);
+    const midFt=hPa2ft((ib.hPa1+ib.hPa2)/2);
+    for(let i=0;i<data.length-1;i++){
+      const A=data[i],B=data[i+1];
+      const iceA=icingAtFt(A.wx,midFt), iceB=icingAtFt(B.wx,midFt);
+      if(!iceA&&!iceB) continue;
+      ctx.fillStyle='rgba(0,200,130,'+(iceA&&iceB?.22:.1)+')';
+      ctx.fillRect(X(A.dist),y2,X(B.dist)-X(A.dist),y1-y2);
+    }
+  }
+
+  // 4. Grid
+  PLEVS.forEach(({hPa,lbl})=>{
+    const y=Yp(hPa);
+    ctx.beginPath(); ctx.moveTo(pL,y); ctx.lineTo(W-pR,y);
+    ctx.strokeStyle=hPa===1013||hPa===700?'rgba(255,255,255,.14)':'rgba(255,255,255,.06)';
+    ctx.lineWidth=hPa===1013?1:.5; ctx.stroke();
+    ctx.fillStyle='rgba(160,190,220,.75)'; ctx.font='10px "Share Tech Mono"'; ctx.textAlign='right';
+    ctx.fillText(lbl,pL-3,y+3.5);
+    ctx.fillStyle='rgba(100,130,160,.6)'; ctx.textAlign='left';
+    ctx.fillText(hPa,W-pR+3,y+3.5);
+  });
+  const nmStep=totNm<=50?5:totNm<=120?10:totNm<=250?25:50;
+  for(let d2=0;d2<=Math.ceil(totNm);d2+=nmStep){
+    if(d2>totNm)break;
+    const x=X(d2);
+    ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,H-pB);
+    ctx.strokeStyle='rgba(255,255,255,.06)'; ctx.lineWidth=.5; ctx.stroke();
+    ctx.fillStyle='rgba(140,165,185,.75)'; ctx.font='9px "Share Tech Mono"'; ctx.textAlign='center';
+    ctx.fillText(d2+'NM',x,H-pB+12);
+    // UTC
+    const etaFrac=d2/totNm;
+    const totMin=(data[data.length-1].etaDt-data[0].etaDt)/60000;
+    const absMin=depUTC.getUTCHours()*60+depUTC.getUTCMinutes()+etaFrac*totMin;
+    const hUTC2=Math.floor(absMin/60)%24, mUTC2=Math.round(absMin%60);
+    ctx.fillStyle='rgba(100,130,155,.55)'; ctx.font='8px "Share Tech Mono"';
+    ctx.fillText(String(hUTC2).padStart(2,'0')+':'+String(mUTC2).padStart(2,'0')+'Z',x,H-pB+23);
+  }
+  ctx.save(); ctx.translate(14,pT+ph/2); ctx.rotate(-Math.PI/2);
+  ctx.fillStyle='rgba(140,165,185,.5)'; ctx.font='9px "Share Tech Mono"'; ctx.textAlign='center';
+  ctx.fillText('ALTITUDE (hPa / FL)',0,0); ctx.restore();
+
+  // 5. Isotherms
+  drawIsotherm(ctx,data,X,Yft,0,'#ff3b3b',2,[4,3]);
+  [-10,-20,-30,10,20].forEach(T=>{
+    drawIsotherm(ctx,data,X,Yft,T,'rgba(80,200,100,.65)',1,[6,4]);
+  });
+  // Freezing level from model
+  ctx.save(); ctx.setLineDash([4,3]); ctx.strokeStyle='rgba(255,80,80,.75)'; ctx.lineWidth=1.6;
+  let pxF=null,pyF=null;
+  for(const pt of data){
+    const fzFt=m2ft(pt.wx.fzM||2000);
+    const cx=X(pt.dist), cy=Yft(Math.max(fzFt,pt.ef));
+    if(pxF!==null){ctx.beginPath();ctx.moveTo(pxF,pyF);ctx.lineTo(cx,cy);ctx.stroke();}
+    pxF=cx; pyF=cy;
+  }
+  ctx.setLineDash([]); ctx.restore();
+
+  // 6. Terrain
+  const tg=ctx.createLinearGradient(0,Yft(7000),0,H-pB);
+  tg.addColorStop(0,'#4a2e10'); tg.addColorStop(.35,'#2d5a14'); tg.addColorStop(1,'#0e1a06');
+  ctx.beginPath();
+  ctx.moveTo(X(data[0].dist),H-pB);
+  data.forEach(d=>ctx.lineTo(X(d.dist),Yft(d.ef)));
+  ctx.lineTo(X(data[data.length-1].dist),H-pB);
+  ctx.closePath(); ctx.fillStyle=tg; ctx.fill();
+  ctx.beginPath();
+  data.forEach((d,i)=>{if(i===0)ctx.moveTo(X(d.dist),Yft(d.ef));else ctx.lineTo(X(d.dist),Yft(d.ef));});
+  ctx.strokeStyle='rgba(100,180,50,.8)'; ctx.lineWidth=1.4; ctx.stroke();
+
+  // 7. Wind barbs at multiple levels
+  const barbStep=Math.max(1,Math.round(data.length/12));
+  const barbLevs=[
+    {altFt:2467, ws:'ws925',wd:'wd925'},
+    {altFt:4781, ws:'ws850',wd:'wd850'},
+    {altFt:9882, ws:'ws700',wd:'wd700'},
+    {altFt:18442,ws:'ws500',wd:'wd500'},
+  ];
+  for(let i=0;i<data.length;i+=barbStep){
+    const pt=data[Math.min(i,data.length-1)];
+    if(!pt.wx) continue;
+    // Surface
+    drawWindBarb(ctx,X(pt.dist),Yft(pt.ef+280),pt.wx.ws10,pt.wx.wd10,'rgba(255,210,120,.85)',13);
+    for(const lv of barbLevs){
+      if(lv.altFt<pt.ef+100) continue;
+      drawWindBarb(ctx,X(pt.dist),Yft(lv.altFt),pt.wx[lv.ws],pt.wx[lv.wd],'rgba(200,220,255,.82)',13);
+      const T=getTatAlt(pt.wx,lv.altFt);
+      if(T!==null){
+        ctx.fillStyle='rgba(180,220,180,.7)'; ctx.font='7px "Share Tech Mono"'; ctx.textAlign='left';
+        ctx.fillText(Math.round(T)+'°',X(pt.dist)+15,Yft(lv.altFt)+3);
+      }
+    }
+    // CAPE symbol
+    if(pt.wx.cape>800){
+      ctx.fillStyle='rgba(255,100,100,.85)'; ctx.font='10px serif'; ctx.textAlign='center';
+      ctx.fillText('⛈',X(pt.dist),pT+12);
+    }
+    // Precipitation
+    if(pt.wx.precip>0.2||(pt.wx.wc>=51&&pt.wx.wc<=82)){
+      const snow=pt.wx.wc>=71&&pt.wx.wc<=77;
+      const by=Yft(pt.ef+700);
+      ctx.fillStyle=snow?'rgba(200,235,255,.85)':'rgba(80,160,255,.8)';
+      ctx.font='10px serif'; ctx.textAlign='center';
+      ctx.fillText(snow?'❄':'╷',X(pt.dist),by);
+    }
+  }
+
+  // 8. MSA line
+  const maxEF=Math.max(...data.map(d=>d.ef));
+  const msaFt=maxEF+1000;
+  ctx.beginPath(); ctx.setLineDash([7,4]);
+  ctx.moveTo(pL,Yft(msaFt)); ctx.lineTo(W-pR,Yft(msaFt));
+  ctx.strokeStyle='rgba(255,59,59,.75)'; ctx.lineWidth=1.3; ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='rgba(255,59,59,.8)'; ctx.font='bold 8px "Share Tech Mono"'; ctx.textAlign='left';
+  ctx.fillText('MSA '+Math.round(msaFt)+'ft',pL+4,Yft(msaFt)-4);
+
+  // 9. Cruise path (purple — como autorouter)
+  ctx.beginPath();
+  ctx.moveTo(X(data[0].dist),Yft(crzFt));
+  data.forEach(d=>ctx.lineTo(X(d.dist),Yft(crzFt)));
+  ctx.strokeStyle='#cc44ff'; ctx.lineWidth=2.2; ctx.stroke();
+  ctx.fillStyle='#cc44ff'; ctx.font='bold 9px "Share Tech Mono"'; ctx.textAlign='right';
+  ctx.fillText('CRZ FL'+String(Math.round(crzFt/100)).padStart(3,'0'),W-pR-3,Yft(crzFt)-4);
+  // Plane icon
+  ctx.font='14px serif'; ctx.textAlign='center'; ctx.fillStyle='#cc44ff';
+  ctx.fillText('✈',W/2,Yft(crzFt)+5);
+
+  // 10. Border + title
+  ctx.strokeStyle='rgba(40,70,100,.7)'; ctx.lineWidth=1; ctx.strokeRect(pL,pT,pw,ph);
+  ctx.fillStyle='rgba(0,232,122,.9)'; ctx.font='bold 11px "Rajdhani",sans-serif'; ctx.textAlign='center';
+  ctx.fillText(
+    depInfo.key+' ➔ '+arrInfo.key+'   ·   '+totNm.toFixed(1)+' NM   ·   FL'+String(Math.round(crzFt/100)).padStart(3,'0')
+    +'   ·   DEP '+String(depUTC.getUTCHours()).padStart(2,'0')+':'+String(depUTC.getUTCMinutes()).padStart(2,'0')+'Z',
+    W/2, pT-18
+  );
+
+  // Aerodrome markers
+  [[data[0],depInfo.key],[data[data.length-1],arrInfo.key]].forEach(([d,k])=>{
+    const x=X(d.dist), y=Yft(d.ef);
+    ctx.fillStyle='#f5a623'; ctx.font='bold 12px "Share Tech Mono"'; ctx.textAlign='center';
+    ctx.fillText('▲',x,y+2);
+    ctx.font='bold 9px "Share Tech Mono"'; ctx.fillText(k,x,y-13);
+    ctx.font='8px "Share Tech Mono"'; ctx.fillStyle='rgba(160,190,210,.8)';
+    ctx.fillText(Math.round(d.ef)+'ft',x,y-24);
+  });
+
+  // Legend bar
+  const leg=[
+    {col:'#ff3b3b',l:'0°C'},{col:'rgba(0,200,130,.7)',l:'ICING'},
+    {col:'rgba(160,165,195,.7)',l:'LOW'},{col:'rgba(90,100,160,.7)',l:'MID'},
+    {col:'rgba(155,180,235,.4)',l:'HIGH'},{col:'#cc44ff',l:'CRZ'},
+  ];
+  let lx=pL;
+  leg.forEach(({col,l})=>{
+    ctx.fillStyle=col; ctx.fillRect(lx,pT-10,14,6);
+    ctx.fillStyle='rgba(155,185,215,.7)'; ctx.font='8px "Share Tech Mono"'; ctx.textAlign='left';
+    ctx.fillText(l,lx+16,pT-5);
+    lx+=48;
+  });
+}
+
+function drawIsotherm(ctx,data,X,Yft,T,col,lw,dash){
+  ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=lw; ctx.setLineDash(dash||[]);
+  let px=null,py=null;
+  for(const pt of data){
+    const lvls=wxLevels(pt.wx,pt.ef);
+    const altFt=isoAlt(lvls,T);
+    if(altFt===null||altFt<=pt.ef){px=null;py=null;continue;}
+    const x=X(pt.dist), y=Yft(altFt);
+    if(px!==null){ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(x,y);ctx.stroke();}
+    px=x; py=y;
+  }
+  if(px!==null){
+    ctx.fillStyle=col; ctx.font='bold 8px "Share Tech Mono"'; ctx.textAlign='left';
+    ctx.fillText(T+'°C',px+2,py+3);
+  }
+  ctx.setLineDash([]); ctx.restore();
+}
+
+function drawWindBarb(ctx,cx,cy,ws,wd,col,sz){
+  if(ws===undefined||ws===null) return;
+  ctx.save(); ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=1.1;
+  if(ws<2.5){
+    ctx.beginPath(); ctx.arc(cx,cy,3.5,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx,cy,6,0,Math.PI*2); ctx.stroke();
+    ctx.restore(); return;
+  }
+  ctx.beginPath(); ctx.arc(cx,cy,2.2,0,Math.PI*2); ctx.fill();
+  const ang=wd*D2R;
+  const ex=cx+Math.sin(ang)*sz, ey=cy-Math.cos(ang)*sz;
+  ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(ex,ey); ctx.stroke();
+  const ux=(cx-ex)/sz, uy=(cy-ey)/sz;
+  const px=-uy, py2=ux;
+  const bL=sz*.65, sp=sz*.21;
+  let pos=0;
+  const pennants=Math.floor(ws/50); let rem=ws%50;
+  const fulls=Math.floor(rem/10); rem=rem%10;
+  const halfs=rem>=5?1:0;
+  for(let k=0;k<pennants;k++){
+    const bx=ex+ux*pos, by=ey+uy*pos;
+    const ex2=bx+ux*sp*2, ey2=by+uy*sp*2;
+    ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(ex2,ey2);
+    ctx.lineTo(bx+px*bL,by+py2*bL); ctx.closePath(); ctx.fill(); pos+=sp*2.4;
+  }
+  for(let k=0;k<fulls;k++){
+    const bx=ex+ux*pos, by=ey+uy*pos;
+    ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx+px*bL,by+py2*bL); ctx.stroke(); pos+=sp;
+  }
+  if(halfs){
+    const bx=ex+ux*pos, by=ey+uy*pos;
+    ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(bx+px*bL*.5,by+py2*bL*.5); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MODAL
+// ═══════════════════════════════════════════════════════════════════
+let _mr=null;
+function askCoords(code){
+  return new Promise(r=>{
+    _mr=r;
+    document.getElementById('msub').innerHTML='Código <b>'+code+'</b> não encontrado.<br>Introduza as coordenadas ou escreva lat,lon no campo.';
+    ['m-lat','m-lon','m-elv'].forEach(id=>document.getElementById(id).value='');
+    document.getElementById('modal').classList.add('open');
+  });
+}
+function modalOk(){
+  const lat=parseFloat(document.getElementById('m-lat').value);
+  const lon=parseFloat(document.getElementById('m-lon').value);
+  const elv=parseFloat(document.getElementById('m-elv').value)||0;
+  if(isNaN(lat)||isNaN(lon)){alert('Coordenadas inválidas.');return;}
+  document.getElementById('modal').classList.remove('open');
+  if(_mr)_mr({lat,lon,elv,n:'Manual'});
+}
+function modalCancel(){document.getElementById('modal').classList.remove('open');if(_mr)_mr(null);}
+function parseLL(s){
+  const m=s.trim().match(/^(-?\d{1,3}\.?\d*)[,\s]+(-?\d{1,3}\.?\d*)$/);
+  if(!m)return null;
+  const la=parseFloat(m[1]),lo=parseFloat(m[2]);
+  if(isNaN(la)||isNaN(lo)||la<-90||la>90)return null;
+  return{lat:la,lon:lo};
+}
+async function resolveAd(raw){
+  const k=raw.trim().toUpperCase();
+  if(DB[k])return{key:k,...DB[k]};
+  const ll=parseLL(raw);
+  if(ll)return{key:raw.trim(),n:'Coordenadas',lat:ll.lat,lon:ll.lon,elv:0,t:'priv'};
+  const res=await askCoords(k);
+  if(!res)return null;
+  return{key:k,n:res.n,lat:res.lat,lon:res.lon,elv:res.elv,t:'priv'};
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MAIN
+// ═══════════════════════════════════════════════════════════════════
+async function doCalc(){
+  const depRaw=document.getElementById('dep').value;
+  const arrRaw=document.getElementById('arr').value;
+  const timeV=document.getElementById('deptime').value;
+  const speed=Math.max(1,parseFloat(document.getElementById('speed').value)||100);
+  const cruise=parseFloat(document.getElementById('cruise').value)||4500;
+  const btn=document.getElementById('calcBtn');
+  btn.disabled=true;
+  ['tableWrap','statsWrap','warnMsa','warnIce','warnCb','scoreBox'].forEach(id=>document.getElementById(id).style.display='none');
+
+  setSt('A resolver aeródromos…','load');
+  const dep=await resolveAd(depRaw);
+  if(!dep){setSt('Partida cancelada.','err');btn.disabled=false;return;}
+  const arr=await resolveAd(arrRaw);
+  if(!arr){setSt('Chegada cancelada.','err');btn.disabled=false;return;}
+  if(Math.abs(dep.lat-arr.lat)<1e-4&&Math.abs(dep.lon-arr.lon)<1e-4){setSt('Partida = Chegada.','err');btn.disabled=false;return;}
+
+  const [hh,mm]=timeV.split(':').map(Number);
+  const depMin=hh*60+mm;
+  const now=new Date();
+  const today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
+  const depUTC=new Date(today.getTime()+depMin*60000);
+
+  const N=80, NW=14;
+  setSt('A calcular rota (Great Circle) e perfil de terreno (DEM)…','load');
+  const pts=gcPts(dep.lat,dep.lon,arr.lat,arr.lon,N);
+  const dists=pts.map(p=>hvNm(dep.lat,dep.lon,p.lat,p.lon));
+  const total=dists[N];
+
+  const elevs=pts.map((p,i)=>{
+    if(i===0) return dep.elv/3.28084;
+    if(i===N) return arr.elv/3.28084;
+    return Math.max(0,demElev(p.lat,p.lon));
+  });
+
+  setSt('A obter meteorologia multi-nível (Open-Meteo)…','load');
+  const wxIdxs=Array.from({length:NW},(_,i2)=>Math.min(Math.round(i2*N/(NW-1)),N));
+  const wxRes=await Promise.all(wxIdxs.map(idx=>{
+    const etaDt=new Date(today.getTime()+(depMin+(dists[idx]/speed)*60)*60000);
+    return getWx(pts[idx].lat,pts[idx].lon,etaDt)
+      .then(w=>({idx,w})).catch(()=>({idx,w:WX0}));
+  }));
+  const wxMap={}; wxRes.forEach(({idx,w})=>wxMap[idx]=w);
+  const wxKeys=Object.keys(wxMap).map(Number).sort((a,b)=>a-b);
+  const wxOk=wxRes.some(r=>r.w!==WX0&&r.w.cL!==0||r.w.T850!==8);
+
+  setSt('A construir perfil…','load');
+  const data=pts.map((pt,i)=>{
+    const wx=iWx(wxMap,wxKeys,i);
+    const em=elevs[i], ef=m2ft(em);
+    const etaDt=new Date(today.getTime()+(depMin+(dists[i]/speed)*60)*60000);
+    return{lat:pt.lat,lon:pt.lon,dist:dists[i],em,ef,wx,etaDt};
+  });
+
+  // Stats
+  const maxEF=Math.max(...data.map(d=>d.ef));
+  const msaFt=maxEF+1000;
+  const ete=(total/speed)*60;
+  const eteH=Math.floor(ete/60), eteM=Math.round(ete%60);
+  const etaH=Math.floor((depMin+ete)/60)%24, etaMi=Math.round((depMin+ete)%60);
+  const avgFz=wxRes.reduce((s,r)=>s+(r.w.fzM||2000),0)/wxRes.length;
+
+  // Score
+  const wxSamples=wxRes.map(r=>r.w);
+  const score=calcScore(wxSamples,cruise,maxEF);
+  const scoreCls=score>=75?'score-ok':score>=50?'score-warn':'score-bad';
+  const scoreLabel=score>=75?'✈ GO — Condições favoráveis':score>=50?'⚠ CAUTION — Verificar detalhes':'✖ NO-GO — Condições adversas';
+
+  document.getElementById('sDist').textContent=total.toFixed(1)+' NM';
+  document.getElementById('sEte').textContent=eteH+'h '+String(eteM).padStart(2,'0')+'m';
+  document.getElementById('sEta').textContent=String(etaH).padStart(2,'0')+':'+String(etaMi).padStart(2,'0')+' UTC';
+  document.getElementById('sMaxT').textContent=Math.round(maxEF)+' ft';
+  document.getElementById('sMsa').textContent=Math.round(msaFt)+' ft';
+  document.getElementById('sFz').textContent=Math.round(m2ft(avgFz))+' ft ('+Math.round(avgFz)+' m)';
+  document.getElementById('sScore').textContent=score+'/100';
+  document.getElementById('statsWrap').style.display='block';
+
+  const sb=document.getElementById('scoreBox');
+  sb.className='score-box '+scoreCls;
+  sb.textContent=scoreLabel+' ('+score+'/100)';
+  sb.style.display='block';
+
+  // Warnings
+  if(cruise<msaFt) document.getElementById('warnMsa').style.display='block';
+  let hasIce=false;
+  for(const pt of data){if(icingAtFt(pt.wx,cruise)){hasIce=true;break;}}
+  if(hasIce) document.getElementById('warnIce').style.display='block';
+  const maxCape=Math.max(...wxSamples.map(w=>w.cape||0));
+  if(maxCape>1000) document.getElementById('warnCb').style.display='block';
+
+  // Tabela
+  const tbody=document.getElementById('tbody');
+  tbody.innerHTML=''; let rows=0;
+  data.forEach((pt,i)=>{
+    if(i%8!==0&&i!==data.length-1) return;
+    const es=String(pt.etaDt.getUTCHours()).padStart(2,'0')+':'+String(pt.etaDt.getUTCMinutes()).padStart(2,'0');
+    const wc=windAtAlt(pt.wx,cruise);
+    const sp2=Math.max(0,pt.wx.T2m-pt.wx.Td2m);
+    const baseFt=Math.round((pt.ef+sp2*400)/100)*100;
+    const hasCloud=(pt.wx.cL+pt.wx.cM+pt.wx.cH)>15;
+    if(!hasCloud) return;
+    const icing=icingAtFt(pt.wx,cruise)?'❄ SIM':'—';
+    const cloudType=pt.wx.wc>=95?'CB':pt.wx.wc>=80?'Cu/CB':pt.wx.cL>30?'St/Sc/Cu':pt.wx.cM>30?'Ac/As':'Ci/Cs';
+    const tr=document.createElement('tr');
+    tr.innerHTML=
+      '<td style="color:#3a5570">P'+String(i).padStart(2,'0')+'</td>'+
+      '<td style="color:#00e87a">'+pt.dist.toFixed(0)+'</td>'+
+      '<td style="color:#3a5570">'+es+'Z</td>'+
+      '<td style="color:#9090bb;font-weight:bold">'+cloudType+'</td>'+
+      '<td style="color:#7a8a9a;font-size:.52rem">'+(pt.wx.cL>30?'Stratiforme':'Médias/Altas')+'</td>'+
+      '<td style="color:#f5a623;font-weight:bold">'+baseFt+'</td>'+
+      '<td style="color:#88aaff">'+Math.max(Math.round(pt.wx.cL),Math.round(pt.wx.cM))+'%</td>'+
+      '<td style="color:#4da6ff;font-weight:bold">'+Math.round(wc.ws)+'kt</td>'+
+      '<td style="color:#7a8a9a">'+degToComp(wc.wd)+' '+Math.round(wc.wd)+'°</td>'+
+      '<td style="color:'+(icing.includes('SIM')?'#00e090':'#3a5570')+'">'+icing+'</td>';
+    tbody.appendChild(tr); rows++;
+  });
+  if(rows>0) document.getElementById('tableWrap').style.display='block';
+
+  // Draw GRAMET
+  setSt('A renderizar GRAMET…','load');
+  const cv=document.getElementById('cvMain');
+  cv.width=cv.parentElement.clientWidth-24; cv.height=400;
+  drawGRAMET(cv,data,dep,arr,cruise,depUTC);
+
+  // Draw map route
+  drawMapRoute(pts,dep,arr);
+
+  setSt(
+    '✓  '+dep.n+' ➔ '+arr.n+
+    '  |  '+total.toFixed(1)+' NM'+
+    '  |  ETE '+eteH+'h'+String(eteM).padStart(2,'0')+'m'+
+    '  |  Score: '+score+'/100'+
+    (wxOk?'':'  ⚠ sem met (offline)'),
+    'ok'
+  );
+  btn.disabled=false;
+}
+
+function setSt(msg,cls){
+  const el=document.getElementById('sb');
+  el.innerHTML='<div class="sb-dot"></div>'+msg;
+  el.className='sb '+(cls||'');
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!document.getElementById('modal').classList.contains('open'))doCalc();
+});
+</script>
+</body>
+</html>
