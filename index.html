@@ -168,6 +168,9 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
   <datalist id="adlist"></datalist>
 
   <div class="slbl">▸ Parâmetros</div>
+  <div class="field"><label>Data do Voo (UTC)</label>
+    <input type="date" id="flightdate"></div>
+
   <div class="field"><label>Hora Partida (UTC)</label>
     <input type="time" id="deptime" value="10:00"></div>
   <div class="row2">
@@ -275,6 +278,11 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
 <script>
 'use strict';
 
+window.addEventListener('load',()=>{
+  try{ initFlightDate(); }catch(e){ console.warn(e); }
+});
+
+
 
 function drawMapRoute(pts, depInfo, arrInfo){
   if(_routeLayer) _map.removeLayer(_routeLayer);
@@ -310,6 +318,7 @@ const DB={
   LPMA:{n:'Madeira / Cristiano Ronaldo',   lat:32.6979,lon:-16.7745,elv:190,  t:'apt'},
   LPLA:{n:'Lajes / Terceira',              lat:38.7618,lon:-27.0908,elv:180,  t:'apt'},
   LPPD:{n:'Ponta Delgada / João Paulo II', lat:37.7412,lon:-25.6979,elv:259,  t:'apt'},
+  LPAR:{n:'Alverca', lat:38.8833, lon:-9.0301, elv:11, t:'apt'},
   LPAZ:{n:'Santa Maria (Açores)',          lat:36.9714,lon:-25.1706,elv:308,  t:'apt'},
   LPPB:{n:'Porto Santo',                   lat:33.0734,lon:-16.3500,elv:299,  t:'apt'},
   LPHR:{n:'Horta / Faial',                 lat:38.5199,lon:-28.7159,elv:118,  t:'apt'},
@@ -337,7 +346,7 @@ const DB={
   LPLZ:{n:'Lousã',                         lat:40.1422,lon:-8.2400, elv:654,  t:'ad'},
   LPMI:{n:'Mirandela',                     lat:41.4703,lon:-7.2278, elv:1322, t:'ad'},
   LPMU:{n:'Mogadouro',                     lat:41.3944,lon:-6.6844, elv:2344, t:'ad'},
-  LPMN:{n:'Montalegre / Venda Nova',       lat:41.8036,lon:-7.7867, elv:1378, t:'ad'},
+  LPMN:{n:'Amendoeira / Montemor-o-Novo', lat:38.7094, lon:-8.2750, elv:636, t:'apt'},
   LPSO:{n:'Ponte de Sôr',                  lat:39.2117,lon:-8.0578, elv:390,  t:'ad'},
   LPPM:{n:'Portimão / Penina',             lat:37.1494,lon:-8.5839, elv:5,    t:'ad'},
   LPPN:{n:'Proença-a-Nova',                lat:39.7311,lon:-7.8747, elv:1335, t:'ad'},
@@ -418,20 +427,22 @@ LEIB: {n:'Ibiza',                                   lat:38.8728, lon: 1.3731, el
 LEDA: {n:'Lleida / Alguaire',                       lat:41.7281, lon: 0.5351, elv:1148, t:'apt'},
 
 // AERÓDROMOS ENAIRE / GA (úteis para ULM e Aviação Geral)
+LECN:{n:'Castellón de la Plana (El Pinar)', lat:39.9984, lon:0.0264, elv:20, t:'apt'},
 LECU: {n:'Madrid / Cuatro Vientos',                 lat:40.3706, lon:-3.7850, elv:2269, t:'ad'},
 LECV: {n:'Casarrubios del Monte / Madrid',          lat:40.2214, lon:-4.0397, elv:2028, t:'ad'},
 LETH: {n:'Almorox / Toledo',                        lat:40.2094, lon:-4.3819, elv:1913, t:'ad'},
-LECU2:{n:'Ocaña / Toledo',                          lat:39.9367, lon:-3.5053, elv:2400, t:'ad'},
+LEOC:{n:'Ocaña', lat:39.9375, lon:-3.5033, elv:2405, t:'apt'},
 LEVF: {n:'Villaframil / Ribadeo (Lugo)',            lat:43.5528, lon:-7.0869, elv:  80, t:'ad'},
 LEDD: {n:'Caldas de Reis / Godos',                  lat:42.5833, lon:-8.6500, elv: 197, t:'ad'},
 LEGP: {n:'La Palma del Condado / Huelva',           lat:37.3544, lon:-6.5692, elv: 151, t:'ad'},
 LEPO: {n:'Córdoba / El Higuerón',                   lat:37.8658, lon:-4.8081, elv: 312, t:'ad'},
-LELL3:{n:'La Cerdanya / Puigcerdà',                 lat:42.3756, lon: 1.8667, elv:3586, t:'ad'},
-LERS2:{n:'La Seu d\'Urgell / Pirineus',            lat:42.3386, lon: 1.4092, elv:2625, t:'ad'},
+LECD:{n:"La Cerdanya / Alp", lat:42.3864, lon:1.8667, elv:3609, t:'apt'},
+LESU:{n:"La Seu d'Urgell / Andorra", lat:42.3386, lon:1.4092, elv:2630, t:'apt'},
+LETC:{n:'Matilla de los Caños', lat:41.5308, lon:-4.9238, elv:2303, t:'apt'},
 LEAP: {n:'Empuriabrava / Girona',                   lat:42.2600, lon: 3.1097, elv:   7, t:'ad'},
 LESB: {n:'Son Bonet / Mallorca',                    lat:39.5988, lon: 2.7028, elv: 150, t:'ad'},
 LEVA: {n:'Ávila',                                   lat:40.6531, lon:-4.8567, elv:3602, t:'ad'},
-LECN: {n:'Cuenca',                                  lat:40.0728, lon:-2.2486, elv:3100, t:'ad'},
+LESS:{n:'Cuenca / Sotos', lat:40.2035, lon:-2.1438, elv:3182, t:'apt'},
 LEAT: {n:'Requena / Valencia (ULM)',                lat:39.4869, lon:-1.1994, elv:2677, t:'ad'},
 
 // ADICIONADOS / CORRIGIDOS
@@ -612,6 +623,41 @@ function m2ft(m){return m*3.28084;}
 // ═══════════════════════════════════════════════════════════════════
 //  METEOROLOGIA — Open-Meteo (multi-level corrected)
 // ═══════════════════════════════════════════════════════════════════
+
+function initFlightDate(){
+  const el=document.getElementById('flightdate');
+  const now=new Date();
+  el.value=now.toISOString().slice(0,10);
+  el.min=now.toISOString().slice(0,10);
+
+  const max=new Date(now);
+  max.setUTCDate(max.getUTCDate()+2); // hoje + 2 = máximo 3 dias
+  el.max=max.toISOString().slice(0,10);
+}
+
+function buildFlightDateTime(){
+  const date=document.getElementById('flightdate').value;
+  const time=document.getElementById('deptime').value||'10:00';
+
+  if(!date) throw new Error('Selecione a data do voo.');
+
+  const dt=new Date(`${date}T${time}:00Z`);
+  const now=new Date();
+
+  const max=new Date(now);
+  max.setUTCDate(max.getUTCDate()+3);
+
+  if(dt < now){
+    throw new Error('A data/hora do voo já passou.');
+  }
+
+  if(dt > max){
+    throw new Error('Planeamento limitado a 3 dias.');
+  }
+
+  return dt;
+}
+
 async function getWx(lat,lon,etaDt){
   const vars=[
     'temperature_925hPa','temperature_850hPa','temperature_700hPa',
@@ -1538,6 +1584,12 @@ async function resolveAd(raw){
 //  MAIN
 // ═══════════════════════════════════════════════════════════════════
 async function doCalc(){
+  try{
+    buildFlightDateTime();
+  }catch(err){
+    alert(err.message);
+    return;
+  }
   const depRaw=document.getElementById('dep').value;
   const arrRaw=document.getElementById('arr').value;
   const timeV=document.getElementById('deptime').value;
