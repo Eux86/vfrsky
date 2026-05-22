@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VFRSKY  — Ibéria GRAMET - Vers. TESTE  Carlos Costa</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
@@ -131,6 +133,28 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
 .airspace-tip{font-family:'Share Tech Mono',monospace;font-size:.62rem;background:#fff;
   border:1px solid #4488cc;color:#1a2c40;padding:4px 8px;line-height:1.5}
 .airspace-tip b{color:#003399}
+
+/* ── Responsivo: telemóvel/tablet ── */
+@media (max-width: 820px){
+  body{height:auto;min-height:100vh;overflow:auto}
+  .layout{flex-direction:column;overflow:visible}
+  .sidebar{width:100%;min-width:0;max-height:none;border-right:none;border-bottom:1px solid var(--border)}
+  .main{min-height:60vh}
+  .hdr-title{font-size:.72rem;letter-spacing:1.5px}
+  .tab-btn{padding:3px 8px;font-size:.55rem;letter-spacing:1px}
+  .gramet-wrap{padding:6px;gap:4px}
+  .twrap{max-height:160px}
+  table{font-size:.5rem}
+  thead th{font-size:.44rem;padding:2px 3px}
+  tbody td{padding:2px 3px}
+  #map{min-height:55vh}
+}
+@media (max-width: 480px){
+  .hdr{padding:5px 8px;gap:6px}
+  .hdr-title{font-size:.6rem}
+  .field input{font-size:.74rem;padding:5px 7px}
+  .btn{font-size:.7rem;padding:7px}
+}
 </style>
 </head>
 <body>
@@ -145,6 +169,7 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
     <button class="tab-btn" id="tab-map" onclick="switchTab('map')">🗺 MAPA</button>
     <button class="tab-btn" id="btn-airspace" onclick="toggleAirspace()" style="border-color:var(--blue);color:var(--blue)">✈ ESPAÇO AÉREO</button>
     <span id="airspace-status" style="font-size:.52rem;color:var(--dim);letter-spacing:1px;align-self:center;margin-left:2px">— OpenAIP PT+ES</span>
+    <button class="tab-btn" id="btn-pdf" onclick="exportPDF()" style="border-color:#8800cc;color:#8800cc">⬇ PDF</button>
   </div>
 </div>
 
@@ -166,6 +191,13 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
   </div>
   <div class="badge" id="arr-badge"></div>
   <datalist id="adlist"></datalist>
+
+  <!-- Waypoints intermédios -->
+  <div class="slbl" style="display:flex;justify-content:space-between;align-items:center">
+    <span>▸ Via (waypoints)</span>
+    <button onclick="addWaypoint()" style="background:rgba(0,138,69,.12);border:1px solid var(--green);color:var(--green);padding:1px 8px;font-size:.58rem;letter-spacing:1px;cursor:pointer;font-family:'Share Tech Mono',monospace" title="Adicionar waypoint">＋ ADD</button>
+  </div>
+  <div id="wpt-list" style="display:flex;flex-direction:column;gap:5px"></div>
 
   <div class="slbl">▸ Parâmetros</div>
   <div class="field"><label>Data do Voo (UTC)</label>
@@ -284,20 +316,202 @@ window.addEventListener('load',()=>{
 
 
 
-function drawMapRoute(pts, depInfo, arrInfo){
-  if(_routeLayer) _map.removeLayer(_routeLayer);
-  _markers.forEach(m=>_map.removeLayer(m));
-  _markers=[];
-  const latlngs=pts.map(p=>[p.lat,p.lon]);
-  _routeLayer=L.polyline(latlngs,{color:'#008a45',weight:3,opacity:.9}).addTo(_map);
-  _map.fitBounds(_routeLayer.getBounds(),{padding:[30,30]});
-  // Markers
-  const mkIcon=(label,col)=>L.divIcon({
-    html:`<div style="background:${col};color:#fff;padding:2px 5px;font-size:10px;font-family:monospace;font-weight:bold;border-radius:3px;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.3)">${label}</div>`,
-    iconAnchor:[0,10], className:''
-  });
-  _markers.push(L.marker([depInfo.lat,depInfo.lon],{icon:mkIcon('▲ '+depInfo.key,'#c47a00')}).addTo(_map));
-  _markers.push(L.marker([arrInfo.lat,arrInfo.lon],{icon:mkIcon('▲ '+arrInfo.key,'#7700aa')}).addTo(_map));
+// Pista (orientação magnética) e frequência (MHz) — opcionais por ICAO
+// Fontes: AIP NAV Portugal (cavok.pt/AIS) · AIP ENAIRE · AENA (verificado 2026)
+// Formato: orientação magnética arredondada a 10° (ex: 16/34)
+const AIRPORT_INFO={
+  // ── Portugal — aeroportos (AIP Portugal 2025) ──
+  LPPT:{rwy:'03/21, 17/35',  freq:'118.105 TWR'},
+  LPPR:{rwy:'17/35',         freq:'118.305 TWR'},
+  LPFR:{rwy:'10/28',         freq:'118.405 TWR'},
+  LPMA:{rwy:'05/23',         freq:'118.405 TWR'},
+  LPLA:{rwy:'15/33',         freq:'120.605 TWR'},
+  LPPD:{rwy:'12/30',         freq:'118.305 TWR'},
+  LPAR:{rwy:'01/19',         freq:'122.100 TWR'},   // Alverca — conv. 19/01→01/19
+  // ── Portugal — aeródromos (AIP Portugal / cavok.pt 2025) ──
+  LPBJ:{rwy:'01/19',         freq:'122.305 AFIS'},
+  LPBR:{rwy:'17/35',         freq:'122.605 AFIS'},
+  LPBG:{rwy:'17/35',         freq:'123.155 AFIS'},
+  LPCB:{rwy:'16/34',         freq:'122.705 AFIS'},
+  LPCH:{rwy:'12/30',         freq:'122.505 AFIS'},
+  LPCO:{rwy:'03/21',         freq:'122.500 AFIS'},
+  LPIN:{rwy:'04/22',         freq:'122.305 AFIS'},
+  LPEV:{rwy:'01/19, 07/25',  freq:'122.500 AFIS'},
+  LPFA:{rwy:'02/20',         freq:'122.405 AFIS'},
+  LPFC:{rwy:'11/29',         freq:'122.305 AFIS'},
+  LPJF:{rwy:'18/36',         freq:'122.405 AFIS'},
+  LPLZ:{rwy:'07/25',         freq:'122.605 AFIS'},
+  LPMI:{rwy:'16/34',         freq:'122.505 AFIS'},
+  LPMU:{rwy:'04/22',         freq:'122.405 AFIS'},
+  LPMN:{rwy:'18/36',         freq:'119.405 AFIS'},
+  LPSO:{rwy:'03/21',         freq:'122.155 AFIS'},
+  LPPM:{rwy:'11/29',         freq:'122.505 AFIS'},
+  LPPN:{rwy:'01/19',         freq:'122.305 AFIS'},
+  LPSC:{rwy:'06/24',         freq:'122.405 AFIS'},
+  LPSR:{rwy:'18/36',         freq:'122.305 AFIS'},
+  LPSE:{rwy:'08/26',         freq:'122.405 AFIS'},
+  LPVR:{rwy:'01/19',         freq:'122.155 AFIS'},
+  LPVL:{rwy:'08/26',         freq:'122.305 AFIS'},
+  LPVZ:{rwy:'18/36',         freq:'122.710 AFIS'},  // Viseu — corrigido 17/35→18/36
+  LPCS:{rwy:'17/35, 05/23',  freq:'119.205 AFIS'},  // Cascais/Tires — AFIS confirmado
+  // ── Espanha — aeroportos AENA (AIP ENAIRE 2025) ──
+  LEMD:{rwy:'14L/32R, 18L/36R, 14R/32L, 18R/36L', freq:'118.155 TWR'},
+  LEBL:{rwy:'02/20, 06L/24R, 06R/24L',   freq:'118.105 TWR'},
+  LEZG:{rwy:'12L/30R, 12R/30L',          freq:'118.405 TWR'},
+  LEXJ:{rwy:'11/29',                      freq:'118.405 TWR'},
+  LEAS:{rwy:'11/29',                      freq:'118.005 TWR'},
+  LEST:{rwy:'17/35',                      freq:'118.305 TWR'},
+  LEVX:{rwy:'02/20',                      freq:'118.305 TWR'},
+  LECO:{rwy:'03/21',                      freq:'118.105 TWR'},
+  LEMG:{rwy:'13/31',                      freq:'118.155 TWR'},
+  LEZL:{rwy:'09/27',                      freq:'118.105 TWR'},
+  LERS:{rwy:'07/25',                      freq:'118.405 TWR'},
+  LEPA:{rwy:'06L/24R, 06R/24L',           freq:'118.305 TWR'},
+  LEIB:{rwy:'06/24',                      freq:'118.155 TWR'},
+  LEMH:{rwy:'01/19, 05/23',               freq:'118.405 TWR'},
+  LEBB:{rwy:'11/29',                      freq:'118.205 TWR'},
+  LEVC:{rwy:'12/30',                      freq:'118.205 TWR'},
+  LEGE:{rwy:'02/20',                      freq:'118.405 TWR'},
+  LESU:{rwy:'04/22',                      freq:'118.300 TWR'},
+  LEVT:{rwy:'04/22, 10/28',               freq:'118.505 TWR'},
+  LEPP:{rwy:'12/30',                      freq:'118.055 TWR'},
+  LELN:{rwy:'17/35',                      freq:'118.305 TWR'},
+  LESA:{rwy:'07/25',                      freq:'118.405 TWR'},
+  LEVD:{rwy:'06/24, 13/31',               freq:'118.105 TWR'},
+  LEBU:{rwy:'11/29',                      freq:'118.305 TWR'},
+  LEBZ:{rwy:'10/28',                      freq:'118.155 TWR'},
+  LEBA:{rwy:'15/33',                      freq:'118.205 TWR'},
+  LEGR:{rwy:'09/27',                      freq:'118.355 TWR'},
+  LEAM:{rwy:'08/26',                      freq:'118.205 TWR'},
+  LEJR:{rwy:'03/21',                      freq:'118.055 TWR'},
+  LEAB:{rwy:'04/22, 09/27',               freq:'118.255 TWR'},
+  LEAL:{rwy:'10/28',                      freq:'118.155 TWR'},
+  LEDA:{rwy:'13/31',                      freq:'118.505 TWR'},
+  LELL:{rwy:'13/31',                      freq:'118.155 TWR'},
+  LECU:{rwy:'10/28, 14/32, 18/36',        freq:'118.305 TWR'},
+};
+
+let _routeOverlays=[]; // todas as camadas auxiliares (régua, rumo, caixas)
+
+function _toRad(d){return d*Math.PI/180;}
+function _toDeg(r){return r*180/Math.PI;}
+function _segNM(la1,lo1,la2,lo2){
+  const R=3440.065,φ1=_toRad(la1),φ2=_toRad(la2),dφ=_toRad(la2-la1),dλ=_toRad(lo2-lo1);
+  const x=Math.sin(dφ/2)**2+Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x));
+}
+function _brgT(la1,lo1,la2,lo2){
+  const φ1=_toRad(la1),φ2=_toRad(la2),dλ=_toRad(lo2-lo1);
+  const y=Math.sin(dλ)*Math.cos(φ2), x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(dλ);
+  return (_toDeg(Math.atan2(y,x))+360)%360;
+}
+function _magVarAt(lat,lon){return 0.3*lon+0.6;} // WMM 2025 aprox. Ibéria
+function _interp(la1,lo1,la2,lo2,f){return [la1+(la2-la1)*f, lo1+(lo2-lo1)*f];}
+
+// allWaypoints = [depInfo, ...waypointInfos, arrInfo]
+function drawMapRoute(allInfos, speed){
+  if(_routeLayer){ _map.removeLayer(_routeLayer); _routeLayer=null; }
+  _markers.forEach(m=>_map.removeLayer(m)); _markers=[];
+  _routeOverlays.forEach(l=>_map.removeLayer(l)); _routeOverlays=[];
+
+  const lls=allInfos.map(p=>[p.lat,p.lon]);
+
+  // Halo branco + linha vermelha
+  const halo=L.polyline(lls,{color:'#fff',weight:8,opacity:.85,lineCap:'round'}).addTo(_map);
+  _routeLayer=L.polyline(lls,{color:'#e60026',weight:4.5,opacity:.95,lineCap:'round'}).addTo(_map);
+  _routeOverlays.push(halo);
+
+  _map.fitBounds(_routeLayer.getBounds(),{padding:[60,60]});
+
+  // ── Construir tabela de distâncias cumulativas ao longo da rota ──
+  const segDists=[0]; // distância cumulativa a cada waypoint
+  for(let i=1;i<allInfos.length;i++){
+    const d=_segNM(allInfos[i-1].lat,allInfos[i-1].lon,allInfos[i].lat,allInfos[i].lon);
+    segDists.push(segDists[i-1]+d);
+  }
+  const totalNM=segDists[segDists.length-1];
+
+  // Interpolação de posição geo a uma distância cumulativa d ao longo da rota multi-segmento
+  function _routeLatLon(d){
+    for(let i=1;i<allInfos.length;i++){
+      if(d<=segDists[i]){
+        const segLen=segDists[i]-segDists[i-1];
+        const f=segLen>0?(d-segDists[i-1])/segLen:0;
+        const [la,lo]=_interp(allInfos[i-1].lat,allInfos[i-1].lon,allInfos[i].lat,allInfos[i].lon,f);
+        return [la,lo];
+      }
+    }
+    return [allInfos[allInfos.length-1].lat,allInfos[allInfos.length-1].lon];
+  }
+
+  // ── Marcas de 10 minutos ──
+  const spd=speed||100;
+  const stepNM=spd*(10/60); // NM por 10 min
+  let elapsedMin=0;
+  for(let d=stepNM; d<totalNM-0.5; d+=stepNM){
+    elapsedMin+=10;
+    const [la,lo]=_routeLatLon(d);
+    const hh=Math.floor(elapsedMin/60), mm=elapsedMin%60;
+    const lbl=`+${hh>0?hh+'h':''}${String(mm).padStart(2,'0')}min`;
+    const tickIcon=L.divIcon({
+      className:'',
+      html:`<div style="position:relative;font-family:system-ui,sans-serif">
+        <div style="position:absolute;left:-5px;top:-5px;width:10px;height:10px;border-radius:50%;background:#0d1b6b;opacity:.85"></div>
+        <div style="position:absolute;left:9px;top:-9px;background:rgba(13,27,107,.92);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap;letter-spacing:.3px">${lbl}</div>
+      </div>`,
+      iconSize:[0,0], iconAnchor:[0,0]
+    });
+    _routeOverlays.push(L.marker([la,lo],{icon:tickIcon,interactive:false}).addTo(_map));
+  }
+
+  // ── Rumos MAG por segmento ──
+  for(let i=1;i<allInfos.length;i++){
+    const A=allInfos[i-1], B=allInfos[i];
+    const trueBrg=_brgT(A.lat,A.lon,B.lat,B.lon);
+    const mv=_magVarAt((A.lat+B.lat)/2,(A.lon+B.lon)/2);
+    const magBrg=Math.round(((trueBrg-mv)%360+360)%360);
+    const [mla,mlo]=_interp(A.lat,A.lon,B.lat,B.lon,0.5);
+    let ang=trueBrg-90;
+    if(ang>90) ang-=180; if(ang<-90) ang+=180;
+    const rumoIcon=L.divIcon({
+      className:'',
+      html:`<div style="transform:translate(-50%,-50%) rotate(${ang}deg);transform-origin:center center;background:#0d1b6b;color:#fff;font:bold 11px system-ui,sans-serif;padding:2px 7px;border-radius:3px;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.3);letter-spacing:.5px">RUMO MAG ${String(magBrg).padStart(3,'0')}°</div>`,
+      iconSize:[0,0], iconAnchor:[0,0]
+    });
+    _routeOverlays.push(L.marker([mla,mlo],{icon:rumoIcon,interactive:false}).addTo(_map));
+  }
+
+  // ── Caixas dos aeródromos ──
+  const buildBox=(info,col,prefix)=>{
+    const ai=AIRPORT_INFO[info.key]||{};
+    const rwy=ai.rwy?`<div style="color:#222"><b>RWY</b> ${ai.rwy}</div>`:'';
+    const freq=ai.freq?`<div style="color:#222"><b>FREQ</b> ${ai.freq}</div>`:'';
+    const elv=(info.elv!=null)?`${info.elv} ft`:'';
+    return L.divIcon({
+      className:'',
+      html:`<div style="display:flex;align-items:flex-start;gap:6px;font-family:system-ui,sans-serif">
+        <div style="width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;border-bottom:14px solid ${col};filter:drop-shadow(0 1px 2px rgba(0,0,0,.4));margin-top:2px"></div>
+        <div style="background:rgba(255,255,255,.97);border:1.5px solid ${col};border-radius:4px;padding:3px 6px;font-size:10.5px;line-height:1.35;white-space:nowrap;box-shadow:0 2px 5px rgba(0,0,0,.2)">
+          <div style="font-weight:700;color:${col}">${prefix} ${info.key} — ${info.n}</div>
+          <div style="color:#555">ELEV ${elv}</div>
+          ${rwy}${freq}
+        </div>
+      </div>`,
+      iconSize:[0,0], iconAnchor:[9,8]
+    });
+  };
+
+  const depInfo=allInfos[0], arrInfo=allInfos[allInfos.length-1];
+  _markers.push(L.marker([depInfo.lat,depInfo.lon],{icon:buildBox(depInfo,'#0a8a3a','PARTIDA'),interactive:false,zIndexOffset:1000}).addTo(_map));
+  _markers.push(L.marker([arrInfo.lat,arrInfo.lon],{icon:buildBox(arrInfo,'#7700aa','CHEGADA'),interactive:false,zIndexOffset:1000}).addTo(_map));
+
+  // Waypoints intermédios
+  for(let i=1;i<allInfos.length-1;i++){
+    const wi=allInfos[i];
+    _markers.push(L.marker([wi.lat,wi.lon],{icon:buildBox(wi,'#c47a00','WPT '+i),interactive:false,zIndexOffset:900}).addTo(_map));
+  }
+
+  window._depInfo=depInfo; window._arrInfo=arrInfo; window._allRouteInfos=allInfos;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -825,11 +1039,15 @@ const PLEVS=[
   {hPa:700,lbl:'FL100'},{hPa:500,lbl:'FL180'},{hPa:300,lbl:'FL300'},
 ];
 
-function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC){
-  // HiDPI / Retina: escalar o canvas para resolução real do ecrã
-  const dpr=window.devicePixelRatio||1;
+function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos){
+  // allInfos = [dep, ...wpts, arr]  (compatível com chamadas antigas sem este arg)
+  if(!allInfos) allInfos=[depInfo,arrInfo];
+  // HiDPI / Retina: escalar o canvas para resolução real do ecrã (min 2x p/ máxima nitidez)
+  const dpr=Math.max(2, window.devicePixelRatio||1);
   const cssW=cv.clientWidth||cv.offsetWidth||900;
-  const cssH=420;
+  // Altura responsiva: 60% da viewport, limitada entre 320 e 560
+  const _vh=window.innerHeight||720;
+  const cssH=Math.max(320, Math.min(560, Math.round(_vh*0.60)));
   cv.width =Math.round(cssW*dpr);
   cv.height=Math.round(cssH*dpr);
   cv.style.width =cssW+'px';
@@ -966,7 +1184,7 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC){
     blocks.push(cur);
 
     ctx.strokeStyle=band.stroke;
-    ctx.lineWidth=1.6;
+    ctx.lineWidth=1.8;
     ctx.setLineDash([]);
 
     for(const blk of blocks){
@@ -974,79 +1192,107 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC){
       const yT=band.yTop;
       const {amp,freq}=band;
 
-      // Pontos base (segue terreno)
-      const baseFwd=[[xL,blk[0].yBotA]];
-      for(const s of blk) baseFwd.push([s.x2,s.yBotB]);
-      const baseRev=[...baseFwd].reverse();
-
-      const topFwd =[[xL,yT],[xR,yT]];
-      const sideR  =[[xR,yT],[xR,blk[blk.length-1].yBotB]];
-      const sideL  =[[xL,blk[0].yBotA],[xL,yT]];
-
+      // Apenas o TOPO bumpy — a base é coberta pelo terreno (step 6) e não deve
+      // aparecer colada ao solo. Os lados são traços verticais finos.
+      const topFwd=[[xL,yT],[xR,yT]];
       ctx.beginPath();
-      // Topo: bumps para cima (dir=+1 na normal que aponta para cima)
-      _softCloudEdge(ctx, topFwd,  amp,      freq,   1);
-      // Lado direito: bumps pequenos
-      _softCloudEdge(ctx, sideR,   amp*0.5,  freq,   1);
-      // Base: bumps para baixo
-      _softCloudEdge(ctx, baseRev, amp*0.6,  freq,   1);
-      // Lado esquerdo: bumps pequenos
-      _softCloudEdge(ctx, sideL,   amp*0.5,  freq,   1);
-      ctx.closePath();
+      _softCloudEdge(ctx, topFwd, amp, freq, 1);
       ctx.stroke();
+
+      // Lados: pequenos traços verticais nas bordas do bloco
+      ctx.beginPath();
+      ctx.moveTo(xL, yT+amp*0.5); ctx.lineTo(xL, blk[0].yBotA);
+      ctx.moveTo(xR, yT+amp*0.5); ctx.lineTo(xR, blk[blk.length-1].yBotB);
+      ctx.lineWidth=0.8; ctx.globalAlpha=0.55; ctx.stroke();
+      ctx.lineWidth=1.8; ctx.globalAlpha=1.0;
     }
   }
 
 
-  // 2b. Cloud base line — linha indelével da base das nuvens baixas
+  // 2b. Cloud base line — base das NUVENS BAIXAS, ft MSL.
+  //     A posição vertical no gráfico é em MSL (mesma escala da altitude).
+  //     A etiqueta mostra MSL e AGL para evitar confusão: o que parece
+  //     "próximo do chão" em MSL pode ter ainda margem AGL confortável.
   {
-    // Calcular baseFt para cada ponto com nuvens
     const cbPts=data.map(pt=>{
-      const sp2=pt.wx.sp2||0;
-      const bf=Math.round((pt.ef+sp2*400)/100)*100;
+      const sp2=Math.max(0,(pt.wx.T2m||15)-(pt.wx.Td2m||10));
+      const aglRaw=Math.round((sp2*400)/100)*100;       // base AGL (ft)
+      const bf=Math.max(pt.ef+aglRaw, pt.ef+100);        // base MSL (ft) — nunca abaixo do terreno
+      const agl=bf-pt.ef;
       const hasCloud=(pt.wx.cL+pt.wx.cM+pt.wx.cH)>15;
-      return {x:X(pt.dist), y:Yft(bf), bf, hasCloud};
+      return {x:X(pt.dist), y:Yft(bf), bf, agl, hasCloud};
     });
 
-    // Linha sólida da base — cor azul escuro contrastante
     ctx.save();
-    ctx.strokeStyle='rgba(30,80,180,0.9)';
-    ctx.lineWidth=2;
+
+    // (a) Halo branco por baixo para destacar do fundo das nuvens
+    ctx.strokeStyle='rgba(255,255,255,0.9)';
+    ctx.lineWidth=5;
     ctx.setLineDash([]);
-    let inCloud=false;
-    for(let i=0;i<cbPts.length;i++){
-      const p=cbPts[i];
-      if(!p.hasCloud){ inCloud=false; continue; }
-      if(!inCloud){ ctx.beginPath(); ctx.moveTo(p.x,p.y); inCloud=true; }
-      else ctx.lineTo(p.x,p.y);
-      // Se próximo ponto não tem nuvem ou é o último, fechar segmento
-      if(i===cbPts.length-1||!cbPts[i+1].hasCloud) ctx.stroke();
+    {
+      let inC=false;
+      for(let i=0;i<cbPts.length;i++){
+        const p=cbPts[i];
+        if(!p.hasCloud){ inC=false; continue; }
+        if(!inC){ ctx.beginPath(); ctx.moveTo(p.x,p.y); inC=true; }
+        else ctx.lineTo(p.x,p.y);
+        if(i===cbPts.length-1||!cbPts[i+1].hasCloud) ctx.stroke();
+      }
     }
 
-    // Tick + label da base — só em cada 4º ponto, sempre ACIMA da linha, fundo branco
-    let _lastLblX=-999;
+    // (b) Linha principal — magenta tracejada, espessura 2.5
+    ctx.strokeStyle='#c8137a';
+    ctx.lineWidth=2.5;
+    ctx.setLineDash([7,3]);
+    {
+      let inC=false;
+      for(let i=0;i<cbPts.length;i++){
+        const p=cbPts[i];
+        if(!p.hasCloud){ inC=false; continue; }
+        if(!inC){ ctx.beginPath(); ctx.moveTo(p.x,p.y); inC=true; }
+        else ctx.lineTo(p.x,p.y);
+        if(i===cbPts.length-1||!cbPts[i+1].hasCloud) ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+
+    // (c) Etiquetas — limpas e legíveis, espaçadas para não se sobreporem
+    //     Formato em duas linhas: "3700 ft" / "1200 AGL"
+    const r50 = v => Math.round(v/50)*50;
+    let _lastLblX=-9999;
+    const MIN_GAP=160; // px mínimos entre etiquetas
     for(let i=0;i<cbPts.length;i++){
       const p=cbPts[i];
       if(!p.hasCloud) continue;
-      // Tick vertical fino
-      ctx.strokeStyle='rgba(20,70,180,0.7)';
+      // Tick vertical discreto em cada ponto
+      ctx.strokeStyle='rgba(160,20,100,0.55)';
       ctx.lineWidth=1;
-      ctx.setLineDash([]);
-      ctx.beginPath(); ctx.moveTo(p.x,p.y-4); ctx.lineTo(p.x,p.y+4); ctx.stroke();
-      // Label: só quando suficientemente afastado do anterior
-      if(p.x-_lastLblX < 38) continue;
+      ctx.beginPath(); ctx.moveTo(p.x,p.y-3); ctx.lineTo(p.x,p.y+3); ctx.stroke();
+      if(p.x-_lastLblX < MIN_GAP) continue;
       _lastLblX=p.x;
-      const lbl=p.bf+'ft';
-      ctx.font='bold 8px "Share Tech Mono"';
-      const tw=ctx.measureText(lbl).width;
-      const lx=p.x, ly=p.y-8;
-      // Fundo branco semi-opaco para legibilidade
-      ctx.fillStyle='rgba(255,255,255,0.82)';
-      ctx.fillRect(lx-tw/2-2, ly-9, tw+4, 11);
-      // Texto azul escuro
-      ctx.fillStyle='rgba(10,50,160,0.95)';
+      const l1 = r50(p.bf)+' ft';
+      const l2 = r50(p.agl)+' AGL';
+      ctx.font='bold 9px "Share Tech Mono"';
+      const tw=Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width);
+      const boxW=tw+8, boxH=22;
+      const lx=p.x, ly=p.y-boxH-3;
+      // Conector do tick à caixa
+      ctx.strokeStyle='rgba(160,20,100,0.55)';
+      ctx.beginPath(); ctx.moveTo(p.x,p.y-3); ctx.lineTo(p.x,ly+boxH); ctx.stroke();
+      // Caixa
+      ctx.fillStyle='rgba(255,255,255,0.96)';
+      ctx.fillRect(lx-boxW/2, ly, boxW, boxH);
+      ctx.strokeStyle='#c8137a';
+      ctx.lineWidth=0.8;
+      ctx.strokeRect(lx-boxW/2, ly, boxW, boxH);
+      // Texto
+      ctx.fillStyle='#a0145a';
       ctx.textAlign='center';
-      ctx.fillText(lbl, lx, ly);
+      ctx.textBaseline='top';
+      ctx.fillText(l1, lx, ly+2);
+      ctx.fillStyle='#6b6b6b';
+      ctx.fillText(l2, lx, ly+11);
+      ctx.textBaseline='alphabetic';
     }
     ctx.restore();
   }
@@ -1459,14 +1705,53 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC){
     W/2, pT-18
   );
 
-  // Aerodrome markers
-  [[data[0],depInfo.key],[data[data.length-1],arrInfo.key]].forEach(([d,k])=>{
-    const x=X(d.dist), y=Yft(d.ef);
-    ctx.fillStyle='#c47a00'; ctx.font='bold 12px "Share Tech Mono"'; ctx.textAlign='center';
-    ctx.fillText('▲',x,y+2);
-    ctx.font='bold 9px "Share Tech Mono"'; ctx.fillText(k,x,y-13);
+  // Aerodrome + waypoint markers
+  // ── Linhas verticais para cada ponto da rota (dep, wpts, arr) ──
+  allInfos.forEach((info, idx)=>{
+    // Encontrar o ponto de data mais próximo desta distância acumulada
+    // As distâncias cumulativas dos waypoints: somam-se segmentos
+    // Calculamos a distância acumulada deste ponto na rota
+    let cumD=0;
+    for(let s=0;s<idx;s++){
+      cumD+=_segNM(allInfos[s].lat,allInfos[s].lon,allInfos[s+1].lat,allInfos[s+1].lon);
+    }
+    const x=X(cumD);
+    const isWpt=idx>0&&idx<allInfos.length-1;
+    if(isWpt){
+      // Linha vertical tracejada
+      ctx.save();
+      ctx.setLineDash([5,4]);
+      ctx.strokeStyle='rgba(180,100,0,.65)';
+      ctx.lineWidth=1.2;
+      ctx.beginPath(); ctx.moveTo(x,pT); ctx.lineTo(x,H-pB); ctx.stroke();
+      ctx.setLineDash([]); ctx.restore();
+    }
+
+    // Marcador de terreno
+    const terrainPt=data.reduce((best,pt)=>{
+      return Math.abs(pt.dist-cumD)<Math.abs(best.dist-cumD)?pt:best;
+    },data[0]);
+    const y=Yft(terrainPt.ef);
+
+    // Ícone: ▲ para dep/arr, ◆ para waypoints
+    const col=idx===0?'#0a8a3a':idx===allInfos.length-1?'#7700aa':'#c47a00';
+    const prefix=idx===0?'DEP':idx===allInfos.length-1?'ARR':'WPT '+idx;
+    ctx.save();
+    ctx.font='bold '+(isWpt?10:12)+'px "Share Tech Mono"';
+    ctx.textAlign='center'; ctx.fillStyle=col;
+    ctx.fillText(isWpt?'◆':'▲',x,y+2);
+    ctx.font='bold 9px "Share Tech Mono"';
+    ctx.fillText(info.key,x,y-13);
     ctx.font='8px "Share Tech Mono"'; ctx.fillStyle='rgba(20,50,90,.8)';
-    ctx.fillText(Math.round(d.ef)+'ft',x,y-24);
+    ctx.fillText(Math.round(terrainPt.ef)+'ft',x,y-24);
+    // Label prefix (DEP / WPT n / ARR) numa caixinha
+    ctx.font='bold 8px "Share Tech Mono"';
+    const pw2=ctx.measureText(prefix).width+6;
+    ctx.fillStyle='rgba(255,255,255,.9)';
+    ctx.fillRect(x-pw2/2,y-38,pw2,10);
+    ctx.strokeStyle=col; ctx.lineWidth=0.8; ctx.strokeRect(x-pw2/2,y-38,pw2,10);
+    ctx.fillStyle=col; ctx.fillText(prefix,x,y-30);
+    ctx.restore();
   });
 
   // Legend bar
@@ -1543,6 +1828,39 @@ function drawWindBarb(ctx,cx,cy,ws,wd,col,sz){
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  WAYPOINTS
+// ═══════════════════════════════════════════════════════════════════
+let _wptCount=0;
+function addWaypoint(){
+  _wptCount++;
+  const id='wpt-'+_wptCount;
+  const div=document.createElement('div');
+  div.id=id+'-row';
+  div.style.cssText='display:flex;gap:4px;align-items:center';
+  div.innerHTML=`
+    <div class="field" style="flex:1;margin:0">
+      <label style="font-size:.48rem;color:var(--dim);letter-spacing:1px">WPT ${_wptCount}</label>
+      <input type="text" id="${id}" maxlength="12" placeholder="ICAO/lat,lon" list="adlist"
+        autocomplete="off" oninput="onBadgeWpt('${id}')"
+        style="background:#f0f4fa;border:1px solid var(--border);color:#1a2c40;padding:5px 8px;font-family:'Share Tech Mono',monospace;font-size:.82rem;letter-spacing:2px;outline:none;width:100%;text-transform:uppercase">
+    </div>
+    <button onclick="removeWaypoint('${id}-row')" title="Remover"
+      style="background:rgba(200,30,30,.08);border:1px solid rgba(200,30,30,.4);color:#cc2222;padding:4px 7px;font-size:.7rem;cursor:pointer;margin-top:14px;flex-shrink:0;font-family:'Share Tech Mono',monospace">✕</button>`;
+  document.getElementById('wpt-list').appendChild(div);
+}
+function removeWaypoint(rowId){
+  const el=document.getElementById(rowId);
+  if(el) el.remove();
+  // Renumerar labels
+  [...document.querySelectorAll('#wpt-list .field label')].forEach((l,i)=>{l.textContent='WPT '+(i+1);});
+}
+function getWaypointValues(){
+  return [...document.querySelectorAll('#wpt-list input[type=text]')]
+    .map(i=>i.value.trim()).filter(v=>v.length>0);
+}
+function onBadgeWpt(id){}
+
+// ═══════════════════════════════════════════════════════════════════
 //  MODAL
 // ═══════════════════════════════════════════════════════════════════
 let _mr=null;
@@ -1606,26 +1924,94 @@ async function doCalc(){
   if(!arr){setSt('Chegada cancelada.','err');btn.disabled=false;return;}
   if(Math.abs(dep.lat-arr.lat)<1e-4&&Math.abs(dep.lon-arr.lon)<1e-4){setSt('Partida = Chegada.','err');btn.disabled=false;return;}
 
+  // Resolver waypoints intermédios
+  const wptRaws=getWaypointValues();
+  const wptInfos=[];
+  for(const raw of wptRaws){
+    const info=await resolveAd(raw);
+    if(!info){setSt('Waypoint cancelado.','err');btn.disabled=false;return;}
+    wptInfos.push(info);
+  }
+  const allInfos=[dep,...wptInfos,arr];
   const [hh,mm]=timeV.split(':').map(Number);
   const depMin=hh*60+mm;
   const now=new Date();
   const today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
   const depUTC=new Date(today.getTime()+depMin*60000);
 
-  const N=80, NW=14;
-  setSt('A calcular rota (Great Circle) e perfil de terreno (DEM)…','load');
-  const pts=gcPts(dep.lat,dep.lon,arr.lat,arr.lon,N);
-  const dists=pts.map(p=>hvNm(dep.lat,dep.lon,p.lat,p.lon));
-  const total=dists[N];
+  const N=300, NW=14;   // 300 pontos → resolução ~1 km para rota de 300 NM
+  setSt('A calcular rota multi-segmento…','load');
 
-  const elevs=pts.map((p,i)=>{
-    if(i===0) return dep.elv/3.28084;
-    if(i===N) return arr.elv/3.28084;
-    return Math.max(0,demElev(p.lat,p.lon));
-  });
+  // Construir pontos ao longo de todos os segmentos
+  const segPtsArr=[];
+  const segDistsArr=[];
+  let cumDist=0;
+  for(let seg=0;seg<allInfos.length-1;seg++){
+    const from=allInfos[seg], to=allInfos[seg+1];
+    const segPts=gcPts(from.lat,from.lon,to.lat,to.lon,N);
+    const segDs=segPts.map(p=>hvNm(from.lat,from.lon,p.lat,p.lon)+cumDist);
+    if(seg===0){
+      segPtsArr.push(...segPts);
+      segDistsArr.push(...segDs);
+    } else {
+      segPtsArr.push(...segPts.slice(1));
+      segDistsArr.push(...segDs.slice(1));
+    }
+    cumDist=segDs[segDs.length-1];
+  }
+  const pts=segPtsArr;
+  const dists=segDistsArr;
+  const total=dists[dists.length-1];
+
+  // ── Elevações SRTM via Open-Elevation API (lotes de 100) ──
+  setSt('A obter perfil de terreno SRTM (Open-Elevation)…','load');
+  async function fetchElevBatch(locations){
+    const r=await fetch('https://api.open-elevation.com/api/v1/lookup',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({locations})
+    });
+    if(!r.ok) throw new Error('open-elev '+r.status);
+    const d=await r.json();
+    return d.results.map(p=>p.elevation);
+  }
+
+  let elevs;
+  try{
+    // Dividir em lotes de 100 pontos
+    const locs=pts.map(p=>({latitude:+p.lat.toFixed(5),longitude:+p.lon.toFixed(5)}));
+    const BATCH=100;
+    const batches=[];
+    for(let i=0;i<locs.length;i+=BATCH) batches.push(locs.slice(i,i+BATCH));
+    const results=await Promise.all(batches.map(b=>fetchElevBatch(b)));
+    const flat=results.flat();
+    elevs=pts.map((p,i)=>{
+      // Aeródromo de partida/chegada: usar elevação oficial
+      if(i===0) return dep.elv/3.28084;
+      if(i===pts.length-1) return arr.elv/3.28084;
+      for(let wi=1;wi<allInfos.length-1;wi++){
+        if(Math.abs(p.lat-allInfos[wi].lat)<0.01&&Math.abs(p.lon-allInfos[wi].lon)<0.01)
+          return allInfos[wi].elv/3.28084;
+      }
+      return Math.max(0, flat[i]??demElev(p.lat,p.lon));
+    });
+  } catch(e){
+    // Fallback: DEM embebido (baixa resolução)
+    console.warn('Open-Elevation indisponível, usando DEM local:',e);
+    setSt('⚠ Terreno local (API indisponível)…','load');
+    elevs=pts.map((p,i)=>{
+      if(i===0) return dep.elv/3.28084;
+      if(i===pts.length-1) return arr.elv/3.28084;
+      for(let wi=1;wi<allInfos.length-1;wi++){
+        if(Math.abs(p.lat-allInfos[wi].lat)<0.01&&Math.abs(p.lon-allInfos[wi].lon)<0.01)
+          return allInfos[wi].elv/3.28084;
+      }
+      return Math.max(0,demElev(p.lat,p.lon));
+    });
+  }
 
   setSt('A obter meteorologia multi-nível (Open-Meteo)…','load');
-  const wxIdxs=Array.from({length:NW},(_,i2)=>Math.min(Math.round(i2*N/(NW-1)),N));
+  const lastIdx=pts.length-1;
+  const wxIdxs=Array.from({length:NW},(_,i2)=>Math.min(Math.round(i2*lastIdx/(NW-1)),lastIdx));
   const wxRes=await Promise.all(wxIdxs.map(idx=>{
     const etaDt=new Date(today.getTime()+(depMin+(dists[idx]/speed)*60)*60000);
     return getWx(pts[idx].lat,pts[idx].lon,etaDt)
@@ -1687,7 +2073,8 @@ async function doCalc(){
     const es=String(pt.etaDt.getUTCHours()).padStart(2,'0')+':'+String(pt.etaDt.getUTCMinutes()).padStart(2,'0');
     const wc=windAtAlt(pt.wx,cruise);
     const sp2=Math.max(0,pt.wx.T2m-pt.wx.Td2m);
-    const baseFt=Math.round((pt.ef+sp2*400)/100)*100;
+    const aglFt=Math.max(100,Math.round((sp2*400)/100)*100);
+    const baseFt=pt.ef+aglFt; // MSL — coerente com a linha do gráfico
     const hasCloud=(pt.wx.cL+pt.wx.cM+pt.wx.cH)>15;
     if(!hasCloud) return;
     const icing=icingAtFt(pt.wx,cruise)?'❄ SIM':'—';
@@ -1699,7 +2086,7 @@ async function doCalc(){
       '<td style="color:#6a8aaa">'+es+'Z</td>'+
       '<td style="color:#4455aa;font-weight:bold">'+cloudType+'</td>'+
       '<td style="color:#5a6a7a;font-size:.52rem">'+(pt.wx.cL>30?'Stratiforme':'Médias/Altas')+'</td>'+
-      '<td style="color:#c47a00;font-weight:bold">'+baseFt+'</td>'+
+      '<td style="color:#c47a00;font-weight:bold">'+(Math.round(baseFt/50)*50)+' ft <span style="color:#a0145a;font-weight:normal">('+(Math.round(aglFt/50)*50)+' AGL)</span></td>'+
       '<td style="color:#1a5fcc">'+Math.max(Math.round(pt.wx.cL),Math.round(pt.wx.cM))+'%</td>'+
       '<td style="color:#0055cc;font-weight:bold">'+Math.round(wc.ws)+'kt</td>'+
       '<td style="color:#5a6a7a">'+degToComp(wc.wd)+' '+Math.round(wc.wd)+'°</td>'+
@@ -1711,11 +2098,12 @@ async function doCalc(){
   // Draw GRAMET
   setSt('A renderizar GRAMET…','load');
   const cv=document.getElementById('cvMain');
-  cv.width=cv.parentElement.clientWidth-24; cv.height=400;
-  drawGRAMET(cv,data,dep,arr,cruise,depUTC);
+  drawGRAMET(cv,data,dep,arr,cruise,depUTC,allInfos);
+  // Guardar contexto p/ re-renderizar em resize
+  window._gramArgs={data,dep,arr,cruise,depUTC,allInfos};
 
   // Draw map route
-  drawMapRoute(pts,dep,arr);
+  drawMapRoute(allInfos, speed);
 
   setSt(
     '✓  '+dep.n+' ➔ '+arr.n+
@@ -1785,12 +2173,20 @@ function switchTab(t){
     document.getElementById('view-'+v).classList.toggle('active',v===t);
     document.getElementById('tab-'+v).classList.toggle('active',v===t);
   });
-  if(t==='map'&&_map) setTimeout(()=>_map.invalidateSize(),50);
+  if(t==='map'&&_map){
+    setTimeout(()=>{
+      _map.invalidateSize();
+      // Auto-ajustar para mostrar toda a rota sempre que se abre o mapa
+      if(_routeLayer){
+        try{ _map.fitBounds(_routeLayer.getBounds(),{padding:[30,30]}); }catch(e){}
+      }
+    },80);
+  }
 }
 
 const _map = L.map('map',{zoomControl:true}).setView([39.5,-8],6);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-  maxZoom:18, attribution:''
+  maxZoom:18, attribution:'', crossOrigin: true
 }).addTo(_map);
 let _routeLayer=null, _markers=[];
 
@@ -1830,6 +2226,317 @@ function toggleAirspace(){
 
 document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!document.getElementById('modal').classList.contains('open'))doCalc();
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  EXPORTAR PDF — GRAMET + MAPA (A4 landscape)
+// ═══════════════════════════════════════════════════════════════════
+async function exportPDF(){
+  const btn=document.getElementById('btn-pdf');
+  const origTxt=btn.textContent;
+  btn.textContent='⏳ A gerar…';
+  btn.disabled=true;
+
+  try{
+    const {jsPDF}=window.jspdf;
+    const pdf=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+    const PW=297, PH=210, M=8; // A4 landscape mm, margem
+
+    // ── Página 1: GRAMET (canvas directo — sem html2canvas, sem CORS) ──
+    const cv=document.getElementById('cvMain');
+    if(cv && cv.width>0){
+      // Título
+      pdf.setFont('helvetica','bold');
+      pdf.setFontSize(11);
+      pdf.setTextColor(0,138,69);
+      pdf.text('VFRSKY — GRAMET',M,M+5);
+      pdf.setFontSize(7);
+      pdf.setTextColor(80,100,130);
+      pdf.text(new Date().toISOString().slice(0,16).replace('T',' ')+'Z',PW-M,M+5,{align:'right'});
+
+      // Canvas → imagem PNG
+      const imgData=cv.toDataURL('image/png');
+      const availW=PW-2*M;
+      const availH=PH-2*M-12;
+      const ratio=cv.height/cv.width;
+      let iW=availW, iH=availW*ratio;
+      if(iH>availH){iH=availH; iW=availH/ratio;}
+      pdf.addImage(imgData,'PNG',M,M+8,iW,iH);
+
+      // Tabela de nuvens (se visível)
+      const tableWrap=document.getElementById('tableWrap');
+      if(tableWrap&&tableWrap.style.display!=='none'){
+        const rows=tableWrap.querySelectorAll('tbody tr');
+        if(rows.length>0){
+          const tY=M+8+iH+4;
+          if(tY+20<PH){
+            pdf.setFontSize(6);
+            pdf.setFont('helvetica','bold');
+            pdf.setTextColor(40,70,110);
+            const cols=['PT','NM','UTC','NUVEM','TIPO','BASE ft','AGL ft','COB%','VENTO kt','DIR','ICING'];
+            const cW=[10,10,12,16,22,16,16,12,16,16,12];
+            let cx=M;
+            cols.forEach((c,k)=>{pdf.text(c,cx,tY); cx+=cW[k];});
+            pdf.setFont('helvetica','normal'); pdf.setTextColor(20,40,80);
+            let ry=tY+5;
+            rows.forEach(r=>{
+              if(ry>PH-M) return;
+              const tds=r.querySelectorAll('td');
+              // A célula BASE original contém "3700 ft (1200 AGL)" — separar
+              // em duas colunas para que ambos os valores caibam no PDF.
+              const cells=[];
+              tds.forEach((td,k)=>{
+                const txt=(td.textContent||'').trim();
+                if(k===5){
+                  const m=txt.match(/^(\S+\s*ft)\s*\(?\s*(\d+)\s*AGL/i);
+                  if(m){ cells.push(m[1]); cells.push(m[2]+' ft'); }
+                  else  { cells.push(txt); cells.push(''); }
+                } else cells.push(txt);
+              });
+              let cx2=M;
+              cells.forEach((v,k)=>{
+                pdf.text(String(v).slice(0,18),cx2,ry);
+                cx2+=cW[k]||10;
+              });
+              ry+=4;
+            });
+          }
+        }
+      }
+    }
+
+    // ── Página 2: MAPA (tiles fetch directo, coordenadas correctas) ──
+    const mapDiv=document.getElementById('map');
+    if(mapDiv && window._map && window._depInfo && window._arrInfo){
+      pdf.addPage();
+
+      // a) Mostrar o mapa se estiver escondido
+      const mapView  = document.getElementById('view-map');
+      const gramView = document.getElementById('view-gramet');
+      const wasHidden = !mapView.classList.contains('active');
+      if(wasHidden){
+        gramView.classList.remove('active'); gramView.style.display='none';
+        mapView.classList.add('active');     mapView.style.display='flex';
+      }
+      _map.invalidateSize(true);
+
+      // b) Centrar na rota
+      const dep    = window._depInfo;
+      const arr    = window._arrInfo;
+      const allPts = window._allRouteInfos || [dep, arr];
+      _map.fitBounds(L.latLngBounds(allPts.map(p=>[p.lat,p.lon])),
+                     {padding:[60,60], animate:false, maxZoom:11});
+      await new Promise(r=>setTimeout(r,500));
+
+      // c) Capturar estado do mapa DEPOIS do fitBounds
+      const SCALE=2, TILE=256;
+      const zoom  = Math.round(_map.getZoom());   // zoom inteiro para tiles
+      const mapSz = _map.getSize();               // tamanho CSS do container
+      const CW    = mapSz.x*SCALE, CH=mapSz.y*SCALE;
+
+      // Canto NW do container em coordenadas de pixel Leaflet (ao zoom actual)
+      const nwLatLng = _map.containerPointToLatLng(L.point(0,0));
+      const seLatLng = _map.containerPointToLatLng(L.point(mapSz.x,mapSz.y));
+      const nwPx     = _map.project(nwLatLng, zoom);   // {x,y} em píxeis do mundo
+      const sePx     = _map.project(seLatLng, zoom);
+
+      // Tiles necessários
+      const tx0=Math.floor(nwPx.x/TILE), ty0=Math.floor(nwPx.y/TILE);
+      const tx1=Math.ceil (sePx.x/TILE), ty1=Math.ceil (sePx.y/TILE);
+      const nTiles=Math.pow(2,zoom);
+
+      // Canvas do mapa
+      const canvas2=document.createElement('canvas');
+      canvas2.width=CW; canvas2.height=CH;
+      const ctx=canvas2.getContext('2d');
+      ctx.fillStyle='#f0ebe3'; ctx.fillRect(0,0,CW,CH);
+
+      // d) Fetch tiles em paralelo
+      btn.textContent='⏳ A descarregar tiles…';
+      const subs=['a','b','c']; let si=0;
+      const tileJobs=[];
+      for(let tx=tx0;tx<=tx1;tx++){
+        for(let ty=ty0;ty<=ty1;ty++){
+          if(tx<0||ty<0||tx>=nTiles||ty>=nTiles) continue;
+          const sub=subs[(si++)%3];
+          const url=`https://${sub}.tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
+          // Posição deste tile no canvas (pixels)
+          const px=(tx*TILE-nwPx.x)*SCALE;
+          const py=(ty*TILE-nwPx.y)*SCALE;
+          tileJobs.push(
+            fetch(url,{mode:'cors',cache:'force-cache'})
+              .then(r=>r.ok?r.blob():null)
+              .then(blob=>blob?new Promise(res=>{
+                const img=new Image();
+                img.onload=()=>{
+                  ctx.drawImage(img,Math.round(px),Math.round(py),TILE*SCALE,TILE*SCALE);
+                  URL.revokeObjectURL(img.src); res();
+                };
+                img.onerror=res;
+                img.src=URL.createObjectURL(blob);
+              }):null)
+              .catch(()=>{})
+          );
+        }
+      }
+      await Promise.all(tileJobs);
+      btn.textContent='⏳ A desenhar anotações…';
+
+      // e) Conversão lat/lon → pixel no canvas (usa a mesma projecção)
+      const S=SCALE;
+      const ll2px=(la,lo)=>{
+        const pt=_map.project(L.latLng(la,lo),zoom);
+        return {x:(pt.x-nwPx.x)*S, y:(pt.y-nwPx.y)*S};
+      };
+      const pdfSpeed=parseFloat(document.getElementById('speed').value)||100;
+
+      // f) Segmentos da rota
+      for(let i=0;i<allPts.length-1;i++){
+        const A=ll2px(allPts[i].lat,allPts[i].lon);
+        const B=ll2px(allPts[i+1].lat,allPts[i+1].lon);
+        ctx.lineCap='round';
+        ctx.strokeStyle='rgba(255,255,255,.88)'; ctx.lineWidth=9*S;
+        ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
+        ctx.strokeStyle='#e60026'; ctx.lineWidth=4.5*S;
+        ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
+      }
+
+      // g) Rumo MAG por segmento
+      for(let i=0;i<allPts.length-1;i++){
+        const A=ll2px(allPts[i].lat,allPts[i].lon);
+        const B=ll2px(allPts[i+1].lat,allPts[i+1].lon);
+        const truB=_brgT(allPts[i].lat,allPts[i].lon,allPts[i+1].lat,allPts[i+1].lon);
+        const mv=_magVarAt((allPts[i].lat+allPts[i+1].lat)/2,(allPts[i].lon+allPts[i+1].lon)/2);
+        const mag=Math.round(((truB-mv)%360+360)%360);
+        let ang=Math.atan2(B.y-A.y,B.x-A.x);
+        if(ang>Math.PI/2) ang-=Math.PI; if(ang<-Math.PI/2) ang+=Math.PI;
+        const lbl='RUMO MAG '+String(mag).padStart(3,'0')+'°';
+        ctx.save();
+        ctx.translate((A.x+B.x)/2,(A.y+B.y)/2); ctx.rotate(ang);
+        ctx.font=`bold ${11*S}px system-ui,sans-serif`;
+        const tw=ctx.measureText(lbl).width;
+        ctx.fillStyle='rgba(13,27,107,.92)'; ctx.fillRect(-tw/2-6*S,-8*S,tw+12*S,16*S);
+        ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(lbl,0,0); ctx.restore();
+      }
+
+      // h) Marcas de 10 minutos
+      {
+        const segDs=[0];
+        for(let i=1;i<allPts.length;i++)
+          segDs.push(segDs[i-1]+_segNM(allPts[i-1].lat,allPts[i-1].lon,allPts[i].lat,allPts[i].lon));
+        const totNM=segDs[segDs.length-1], stepNM=pdfSpeed*(10/60);
+        const rll=d=>{
+          for(let i=1;i<allPts.length;i++){
+            if(d<=segDs[i]){
+              const f=(segDs[i]-segDs[i-1])>0?(d-segDs[i-1])/(segDs[i]-segDs[i-1]):0;
+              return _interp(allPts[i-1].lat,allPts[i-1].lon,allPts[i].lat,allPts[i].lon,f);
+            }
+          }
+          return [allPts[allPts.length-1].lat,allPts[allPts.length-1].lon];
+        };
+        ctx.font=`700 ${9*S}px system-ui,sans-serif`; ctx.textBaseline='middle';
+        let elMin=0;
+        for(let d=stepNM;d<totNM-0.5;d+=stepNM){
+          elMin+=10;
+          const [la,lo]=rll(d); const P=ll2px(la,lo);
+          const hh=Math.floor(elMin/60),mm=elMin%60;
+          const lbl=`+${hh>0?hh+'h':''}${String(mm).padStart(2,'0')}min`;
+          ctx.fillStyle='#0d1b6b';
+          ctx.beginPath(); ctx.arc(P.x,P.y,5*S,0,Math.PI*2); ctx.fill();
+          const tw=ctx.measureText(lbl).width;
+          ctx.fillStyle='rgba(13,27,107,.92)'; ctx.fillRect(P.x+7*S,P.y-6*S,tw+6*S,12*S);
+          ctx.fillStyle='#fff'; ctx.textAlign='left'; ctx.fillText(lbl,P.x+10*S,P.y);
+        }
+      }
+
+      // i) Caixas de aeródromo / waypoint
+      const drawBox=(info,col,prefix)=>{
+        const P=ll2px(info.lat,info.lon);
+        const ai=AIRPORT_INFO[info.key]||{};
+        const lines=[
+          prefix+' '+info.key+' — '+info.n,
+          'ELEV '+(info.elv!=null?info.elv+' ft':'—'),
+          ai.rwy?'RWY '+ai.rwy:'', ai.freq?'FREQ '+ai.freq:''
+        ].filter(Boolean);
+        ctx.font=`bold ${10.5*S}px system-ui,sans-serif`;
+        let mW=ctx.measureText(lines[0]).width;
+        ctx.font=`${10.5*S}px system-ui,sans-serif`;
+        for(let i=1;i<lines.length;i++) mW=Math.max(mW,ctx.measureText(lines[i]).width);
+        const bpx=6*S,bpy=4*S,lh=13*S,tri=10*S;
+        const bw=mW+2*bpx, bh=lines.length*lh+2*bpy;
+        ctx.fillStyle=col;
+        ctx.beginPath(); ctx.moveTo(P.x,P.y);
+        ctx.lineTo(P.x-tri,P.y-tri*1.4); ctx.lineTo(P.x+tri,P.y-tri*1.4);
+        ctx.closePath(); ctx.fill();
+        const bx=P.x+tri+4*S, by=P.y-bh-2*S;
+        ctx.fillStyle='rgba(255,255,255,.97)'; ctx.fillRect(bx,by,bw,bh);
+        ctx.strokeStyle=col; ctx.lineWidth=1.5*S; ctx.strokeRect(bx,by,bw,bh);
+        ctx.textAlign='left'; ctx.textBaseline='top';
+        ctx.font=`bold ${10.5*S}px system-ui,sans-serif`; ctx.fillStyle=col; ctx.fillText(lines[0],bx+bpx,by+bpy);
+        ctx.font=`${10.5*S}px system-ui,sans-serif`; ctx.fillStyle='#222';
+        for(let i=1;i<lines.length;i++) ctx.fillText(lines[i],bx+bpx,by+bpy+i*lh);
+      };
+      drawBox(dep,'#0a8a3a','PARTIDA');
+      drawBox(arr,'#7700aa','CHEGADA');
+      for(let wi=1;wi<allPts.length-1;wi++) drawBox(allPts[wi],'#c47a00','WPT '+wi);
+
+      // j) Restaurar tab
+      if(wasHidden){
+        mapView.classList.remove('active'); mapView.style.display='none';
+        gramView.classList.add('active');   gramView.style.display='flex';
+      }
+
+      // k) Inserir no PDF
+      pdf.setFont('helvetica','bold'); pdf.setFontSize(11); pdf.setTextColor(0,138,69);
+      pdf.text('VFRSKY — MAPA DE ROTA',M,M+5);
+      pdf.setFontSize(7); pdf.setTextColor(80,100,130);
+      pdf.text(dep.key+' → '+arr.key+'  |  '+new Date().toISOString().slice(0,16).replace('T',' ')+'Z',
+               PW-M,M+5,{align:'right'});
+      const imgData=canvas2.toDataURL('image/jpeg',0.93);
+      const availW=PW-2*M, availH=PH-2*M-10;
+      const ratio=CH/CW; let iW=availW, iH=availW*ratio;
+      if(iH>availH){iH=availH; iW=availH/ratio;}
+      pdf.addImage(imgData,'JPEG',M,M+8,iW,iH);
+    }
+
+    // Rodapé em ambas as páginas
+    const total=pdf.getNumberOfPages();
+    for(let p=1;p<=total;p++){
+      pdf.setPage(p);
+      pdf.setFontSize(6); pdf.setTextColor(120,140,160);
+      pdf.text('VFRSKY Ibéria — Gerado em '+new Date().toISOString().slice(0,16).replace('T',' ')+'Z  |  Pág '+p+'/'+total,PW/2,PH-3,{align:'center'});
+    }
+
+    // Nome do ficheiro com rota se disponível
+    const depV=(document.getElementById('dep').value||'DEP').toUpperCase();
+    const arrV=(document.getElementById('arr').value||'ARR').toUpperCase();
+    const dateV=(document.getElementById('flightdate').value||'').replace(/-/g,'');
+    pdf.save('VFRSKY_'+depV+'_'+arrV+'_'+dateV+'.pdf');
+
+  }catch(e){
+    console.error('PDF export error:',e);
+    alert('Erro ao exportar PDF: '+e.message);
+  }finally{
+    btn.textContent=origTxt;
+    btn.disabled=false;
+  }
+}
+
+// Re-render automático ao redimensionar (PC, telemóvel, rotação)
+let _resizeT=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(_resizeT);
+  _resizeT=setTimeout(()=>{
+    if(window._gramArgs){
+      const cv=document.getElementById('cvMain');
+      if(cv) drawGRAMET(cv,_gramArgs.data,_gramArgs.dep,_gramArgs.arr,_gramArgs.cruise,_gramArgs.depUTC,_gramArgs.allInfos);
+    }
+    if(window._map){
+      _map.invalidateSize();
+      if(window._routeLayer){ try{ _map.fitBounds(_routeLayer.getBounds(),{padding:[30,30]}); }catch(e){} }
+    }
+  },180);
 });
 </script>
 </body>
