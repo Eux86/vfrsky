@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VFRSKY  — Ibéria GRAMET - Vers. TESTE  Carlos Costa</title>
+<title>VFRSKY  — Ibéria GRAMET - v20 (METEO+Terreno reforçados) — Carlos Costa</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -798,13 +798,34 @@ const DEM=[
 /*36.0*/[  0,  0,  5, 20, 100, 300, 400,400,300,300,400, 550, 600, 650, 700, 800, 850, 950,1100,1200,1400,1300,1000, 600, 200,  80,  15,   5],
 ];
 function demElev(lat,lon){
-  lat=Math.max(36.75,Math.min(42.25,lat));
-  lon=Math.max(-9.50,Math.min(-6.00,lon));
+  // DEM local cobre apenas Portugal continental [36.75..42.25, -9.50..-6.00].
+  // Fora desta caixa, devolver null (em vez de extrapolar valores errados em Espanha).
+  if(lat<36.75||lat>42.25||lon<-9.50||lon>-6.00) return null;
   const ri=(DL0-lat)/DDLAT, ci=(lon-DL1)/DDLON;
   const r0=Math.min(Math.floor(ri),DROWS-2), dr=ri-r0;
   const c0=Math.min(Math.floor(ci),DCOLS-2), dc=ci-c0;
   return DEM[r0][c0]*(1-dr)*(1-dc)+DEM[r0][c0+1]*(1-dr)*dc
         +DEM[r0+1][c0]*dr*(1-dc)+DEM[r0+1][c0+1]*dr*dc;
+}
+
+// ── Fetch utilitário: timeout + retries com back-off exponencial ──
+async function fetchJSON(url, opts={}, {timeout=12000, retries=2}={}){
+  let lastErr;
+  for(let attempt=0; attempt<=retries; attempt++){
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(), timeout);
+    try{
+      const r=await fetch(url,{...opts, signal:ctrl.signal});
+      clearTimeout(tid);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return await r.json();
+    }catch(e){
+      clearTimeout(tid);
+      lastErr=e;
+      if(attempt<retries) await new Promise(res=>setTimeout(res, 400*Math.pow(2,attempt)));
+    }
+  }
+  throw lastErr;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -872,70 +893,135 @@ function buildFlightDateTime(){
   return dt;
 }
 
+// Cache de respostas Open-Meteo por (lat,lon arredondados, hora UTC truncada)
+const _wxCache=new Map();
+const PLEVS_HPA=[925,850,700,500,300];
+
 async function getWx(lat,lon,etaDt){
+  const key=lat.toFixed(2)+','+lon.toFixed(2)+'@'+etaDt.toISOString().slice(0,13);
+  if(_wxCache.has(key)) return _wxCache.get(key);
+
   const vars=[
-    'temperature_925hPa','temperature_850hPa','temperature_700hPa',
-    'temperature_500hPa','temperature_300hPa',
-    'relativehumidity_850hPa','relativehumidity_700hPa','relativehumidity_500hPa',
+    'temperature_925hPa','temperature_850hPa','temperature_700hPa','temperature_500hPa','temperature_300hPa',
+    'relativehumidity_925hPa','relativehumidity_850hPa','relativehumidity_700hPa','relativehumidity_500hPa',
     'windspeed_925hPa','windspeed_850hPa','windspeed_700hPa','windspeed_500hPa','windspeed_300hPa',
     'winddirection_925hPa','winddirection_850hPa','winddirection_700hPa','winddirection_500hPa','winddirection_300hPa',
+    'geopotential_height_925hPa','geopotential_height_850hPa','geopotential_height_700hPa','geopotential_height_500hPa','geopotential_height_300hPa',
     'cloud_cover_low','cloud_cover_mid','cloud_cover_high',
-    'weather_code','cape','freezing_level_height','precipitation',
-    'temperature_2m','dew_point_2m','windspeed_10m','winddirection_10m',
+    'weather_code','cape','lifted_index','convective_inhibition',
+    'freezing_level_height','precipitation','surface_pressure',
+    'temperature_2m','dew_point_2m','windspeed_10m','winddirection_10m','wind_gusts_10m',
     'visibility'
   ].join(',');
-  const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&hourly=${vars}&wind_speed_unit=kn&timezone=UTC&forecast_days=3`;
-  const r=await fetch(url);
-  if(!r.ok) throw 0;
-  const d=await r.json();
-  const tgt=etaDt.toISOString().slice(0,13);
-  let i=d.hourly.time.findIndex(t=>t===tgt); if(i<0)i=0;
+  // models=best_match deixa Open-Meteo escolher (ECMWF IFS para Europa, com fallback)
+  const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`+
+            `&hourly=${vars}&wind_speed_unit=kn&timezone=UTC&models=best_match&forecast_days=3`;
+  const d=await fetchJSON(url, {}, {timeout:12000, retries:2});
   const g=d.hourly;
-  const G=(k,def=0)=>(g[k]?.[i]??def);   // ← CORRIGIDO: acesso por índice
-  return{
-    T2m:G('temperature_2m',15),  Td2m:G('dew_point_2m',10),
+  // Interpolação temporal linear entre as 2 horas adjacentes
+  const tgtMs=etaDt.getTime();
+  const times=g.time.map(t=>Date.parse(t+'Z'));
+  let i1=times.findIndex(t=>t>=tgtMs);
+  if(i1<=0) i1=1;
+  if(i1>=times.length) i1=times.length-1;
+  const i0=i1-1;
+  const frac=Math.max(0,Math.min(1,(tgtMs-times[i0])/(times[i1]-times[i0]||1)));
+  const G=(k,def)=>{
+    const a=g[k]?.[i0], b=g[k]?.[i1];
+    if(a==null && b==null) return def;
+    if(a==null) return b;
+    if(b==null) return a;
+    return a*(1-frac)+b*frac;
+  };
+  // Circular interp para direção do vento
+  const Gdir=(k,def=270)=>{
+    const a=g[k]?.[i0], b=g[k]?.[i1];
+    if(a==null && b==null) return def;
+    if(a==null) return b; if(b==null) return a;
+    let diff=((b-a+540)%360)-180; return (a+diff*frac+360)%360;
+  };
+  const wx={
+    _ok:true,
+    T2m:G('temperature_2m',15), Td2m:G('dew_point_2m',10),
     T925:G('temperature_925hPa',12), T850:G('temperature_850hPa',8),
-    T700:G('temperature_700hPa',2),  T500:G('temperature_500hPa',-10),
-    T300:G('temperature_300hPa',-35),
-    RH850:G('relativehumidity_850hPa',60),
-    RH700:G('relativehumidity_700hPa',50),
-    RH500:G('relativehumidity_500hPa',40),
-    ws10:G('windspeed_10m'),      wd10:G('winddirection_10m',270),
-    ws925:G('windspeed_925hPa'),  wd925:G('winddirection_925hPa',270),
-    ws850:G('windspeed_850hPa'),  wd850:G('winddirection_850hPa',270),
-    ws700:G('windspeed_700hPa'),  wd700:G('winddirection_700hPa',270),
-    ws500:G('windspeed_500hPa'),  wd500:G('winddirection_500hPa',270),
-    ws300:G('windspeed_300hPa'),  wd300:G('winddirection_300hPa',270),
-    cL:G('cloud_cover_low'),      cM:G('cloud_cover_mid'),
-    cH:G('cloud_cover_high'),     wc:G('weather_code'),
-    cape:G('cape'),               fzM:G('freezing_level_height',2000),
-    precip:G('precipitation'),
+    T700:G('temperature_700hPa',2), T500:G('temperature_500hPa',-10), T300:G('temperature_300hPa',-35),
+    RH925:G('relativehumidity_925hPa',75), RH850:G('relativehumidity_850hPa',60),
+    RH700:G('relativehumidity_700hPa',50), RH500:G('relativehumidity_500hPa',40),
+    ws10:G('windspeed_10m',0),     wd10:Gdir('winddirection_10m'),
+    ws925:G('windspeed_925hPa',0), wd925:Gdir('winddirection_925hPa'),
+    ws850:G('windspeed_850hPa',0), wd850:Gdir('winddirection_850hPa'),
+    ws700:G('windspeed_700hPa',0), wd700:Gdir('winddirection_700hPa'),
+    ws500:G('windspeed_500hPa',0), wd500:Gdir('winddirection_500hPa'),
+    ws300:G('windspeed_300hPa',0), wd300:Gdir('winddirection_300hPa'),
+    gusts:G('wind_gusts_10m',0),
+    // Altitudes geopotenciais reais (m → ft)
+    h925:m2ft(G('geopotential_height_925hPa',752)),
+    h850:m2ft(G('geopotential_height_850hPa',1457)),
+    h700:m2ft(G('geopotential_height_700hPa',3012)),
+    h500:m2ft(G('geopotential_height_500hPa',5574)),
+    h300:m2ft(G('geopotential_height_300hPa',9164)),
+    cL:G('cloud_cover_low',0), cM:G('cloud_cover_mid',0), cH:G('cloud_cover_high',0),
+    wc:g.weather_code?.[Math.round(i0+frac)]??0,
+    cape:G('cape',0), li:G('lifted_index',0), cin:G('convective_inhibition',0),
+    fzM:G('freezing_level_height',2000),
+    precip:G('precipitation',0),
+    psfc:G('surface_pressure',1013.25),
     vis:G('visibility',10000),
   };
+  _wxCache.set(key,wx);
+  return wx;
 }
-const WX0={T2m:15,Td2m:10,T925:12,T850:8,T700:2,T500:-10,T300:-35,
-  RH850:60,RH700:50,RH500:40,
+const WX0={_ok:false,T2m:15,Td2m:10,T925:12,T850:8,T700:2,T500:-10,T300:-35,
+  RH925:75,RH850:60,RH700:50,RH500:40,
   ws10:0,wd10:270,ws925:0,wd925:270,ws850:0,wd850:270,
   ws700:0,wd700:270,ws500:0,wd500:270,ws300:0,wd300:270,
-  cL:0,cM:0,cH:0,wc:0,cape:0,fzM:2000,precip:0,vis:10000};
+  gusts:0,h925:2467,h850:4781,h700:9882,h500:18442,h300:30065,
+  cL:0,cM:0,cH:0,wc:0,cape:0,li:0,cin:0,fzM:2000,precip:0,psfc:1013.25,vis:10000};
 
 function wxLevels(wx,elevFt){
   return[
-    {altFt:Math.max(0,elevFt), T:wx.T2m,  RH:80},
-    {altFt:2467,               T:wx.T925, RH:70},
-    {altFt:4781,               T:wx.T850, RH:wx.RH850},
-    {altFt:9882,               T:wx.T700, RH:wx.RH700},
-    {altFt:18442,              T:wx.T500, RH:wx.RH500},
-    {altFt:30065,              T:wx.T300, RH:40},
+    {altFt:Math.max(0,elevFt), T:wx.T2m,  RH:Math.max(80, wx.RH925||80)},
+    {altFt:wx.h925||2467,      T:wx.T925, RH:wx.RH925||70},
+    {altFt:wx.h850||4781,      T:wx.T850, RH:wx.RH850},
+    {altFt:wx.h700||9882,      T:wx.T700, RH:wx.RH700},
+    {altFt:wx.h500||18442,     T:wx.T500, RH:wx.RH500},
+    {altFt:wx.h300||30065,     T:wx.T300, RH:40},
   ].filter(l=>l.altFt>=elevFt-100);
 }
 
+// Interpolação linear contínua (em altitude) — sem degraus
+function _interpByAlt(lvls, altFt, key){
+  if(altFt<=lvls[0].altFt) return lvls[0][key];
+  if(altFt>=lvls[lvls.length-1].altFt) return lvls[lvls.length-1][key];
+  for(let j=0;j<lvls.length-1;j++){
+    if(altFt>=lvls[j].altFt && altFt<=lvls[j+1].altFt){
+      const t=(altFt-lvls[j].altFt)/(lvls[j+1].altFt-lvls[j].altFt);
+      return lvls[j][key]*(1-t)+lvls[j+1][key]*t;
+    }
+  }
+  return lvls[lvls.length-1][key];
+}
+
 function windAtAlt(wx,altFt){
-  if(altFt<3500)  return{ws:wx.ws925,wd:wx.wd925};
-  if(altFt<7500)  return{ws:wx.ws850,wd:wx.wd850};
-  if(altFt<14000) return{ws:wx.ws700,wd:wx.wd700};
-  if(altFt<24000) return{ws:wx.ws500,wd:wx.wd500};
-  return{ws:wx.ws300,wd:wx.wd300};
+  const lv=[
+    {altFt:50,             ws:wx.ws10,  wd:wx.wd10},
+    {altFt:wx.h925||2467,  ws:wx.ws925, wd:wx.wd925},
+    {altFt:wx.h850||4781,  ws:wx.ws850, wd:wx.wd850},
+    {altFt:wx.h700||9882,  ws:wx.ws700, wd:wx.wd700},
+    {altFt:wx.h500||18442, ws:wx.ws500, wd:wx.wd500},
+    {altFt:wx.h300||30065, ws:wx.ws300, wd:wx.wd300},
+  ];
+  // ws: interp linear; wd: interp circular linear
+  const ws=_interpByAlt(lv, altFt, 'ws');
+  // direcção: encontrar par e fazer shortest-arc
+  let a=lv[0], b=lv[lv.length-1];
+  for(let j=0;j<lv.length-1;j++){
+    if(altFt>=lv[j].altFt&&altFt<=lv[j+1].altFt){a=lv[j];b=lv[j+1];break;}
+  }
+  const tt=Math.max(0,Math.min(1,(altFt-a.altFt)/((b.altFt-a.altFt)||1)));
+  let diff=((b.wd-a.wd+540)%360)-180;
+  const wd=(a.wd+diff*tt+360)%360;
+  return{ws,wd};
 }
 
 function isoAlt(lvls,Ttgt){
@@ -951,20 +1037,28 @@ function isoAlt(lvls,Ttgt){
 
 function getTatAlt(wx,altFt){
   const lvls=wxLevels(wx,0);
-  for(let j=0;j<lvls.length-1;j++){
-    if(altFt>=lvls[j].altFt&&altFt<=lvls[j+1].altFt){
-      const t=(altFt-lvls[j].altFt)/(lvls[j+1].altFt-lvls[j].altFt);
-      return lvls[j].T+t*(lvls[j+1].T-lvls[j].T);
-    }
-  }
-  return null;
+  return _interpByAlt(lvls, altFt, 'T');
 }
 
 function midRH(wx,hPa){
-  if(hPa>875) return 80;
-  if(hPa>775) return wx.RH850;
-  if(hPa>600) return wx.RH700;
-  return wx.RH500;
+  // Interpolação em log(p) entre níveis reais com RH conhecida
+  const pts=[
+    {p:1000, rh:Math.max(80,wx.RH925||80)},
+    {p:925,  rh:wx.RH925||70},
+    {p:850,  rh:wx.RH850},
+    {p:700,  rh:wx.RH700},
+    {p:500,  rh:wx.RH500},
+    {p:300,  rh:40},
+  ];
+  if(hPa>=pts[0].p) return pts[0].rh;
+  if(hPa<=pts[pts.length-1].p) return pts[pts.length-1].rh;
+  for(let j=0;j<pts.length-1;j++){
+    if(hPa<=pts[j].p && hPa>=pts[j+1].p){
+      const t=(Math.log(pts[j].p)-Math.log(hPa))/(Math.log(pts[j].p)-Math.log(pts[j+1].p));
+      return pts[j].rh*(1-t)+pts[j+1].rh*t;
+    }
+  }
+  return 50;
 }
 
 function icingAtFt(wx,altFt){
@@ -983,24 +1077,34 @@ function calcScore(wxList, crzFt, maxEF){
   const avg=(key)=>wxList.reduce((a,w)=>a+(w[key]||0),0)/wxList.length;
   const cL=avg('cL'), cM=avg('cM'), wsAvg=avg('ws850');
   const hasIce=wxList.some(w=>icingAtFt(w,crzFt));
-  const hasCb=wxList.some(w=>w.cape>1000||(w.wc>=95));
+  // CB: CAPE alto, weather_code tempestade, ou lifted_index muito negativo
+  const hasCb=wxList.some(w=>w.cape>1000 || w.wc>=95 || (w.li!=null && w.li<-4));
   const avgCape=avg('cape');
-  // Cloud penalties
+  const avgLi=wxList.reduce((a,w)=>a+(w.li||0),0)/wxList.length;
+  const maxGust=Math.max(...wxList.map(w=>w.gusts||0));
+  const minVis=Math.min(...wxList.map(w=>w.vis??10000));
+  const maxPrecip=Math.max(...wxList.map(w=>w.precip||0));
+  // Nuvens
   if(cL>80) s-=35; else if(cL>60) s-=20; else if(cL>40) s-=10;
   if(cM>60) s-=15; else if(cM>40) s-=8;
-  // Wind penalties
+  // Vento e rajadas
   if(wsAvg>40) s-=30; else if(wsAvg>25) s-=15; else if(wsAvg>15) s-=5;
+  if(maxGust>35) s-=15; else if(maxGust>25) s-=7;
   // Icing
   if(hasIce) s-=25;
-  // Cb / Convection
+  // Convecção
   if(hasCb) s-=30; else if(avgCape>500) s-=12;
-  // Terrain margin
+  if(avgLi<-2) s-=8;
+  // Visibilidade (metros) e precipitação (mm/h)
+  if(minVis<3000) s-=30; else if(minVis<5000) s-=15; else if(minVis<8000) s-=5;
+  if(maxPrecip>5) s-=20; else if(maxPrecip>2) s-=10; else if(maxPrecip>0.5) s-=4;
+  // Margem ao terreno
   const margin=crzFt-maxEF;
   if(margin<500) s-=40; else if(margin<1000) s-=20; else if(margin<2000) s-=5;
   return Math.max(0,Math.round(s));
 }
 
-// Interpolação met ao longo da rota
+// Interpolação met espacial ao longo da rota (linear; direcção em arco curto)
 function iWx(wxMap,wxKeys,i){
   if(!wxKeys.length) return WX0;
   if(i<=wxKeys[0]) return wxMap[wxKeys[0]];
@@ -1010,22 +1114,20 @@ function iWx(wxMap,wxKeys,i){
     if(wxKeys[j]<=i&&i<=wxKeys[j+1]){lo=wxKeys[j];hi=wxKeys[j+1];break;}
   }
   const t=(i-lo)/(hi-lo), a=wxMap[lo], b=wxMap[hi];
-  const L=(x,y)=>x*(1-t)+y*t;
-  return{
-    T2m:L(a.T2m,b.T2m),Td2m:L(a.Td2m,b.Td2m),
-    T925:L(a.T925,b.T925),T850:L(a.T850,b.T850),
-    T700:L(a.T700,b.T700),T500:L(a.T500,b.T500),T300:L(a.T300,b.T300),
-    RH850:L(a.RH850,b.RH850),RH700:L(a.RH700,b.RH700),RH500:L(a.RH500,b.RH500),
-    ws10:L(a.ws10,b.ws10),wd10:L(a.wd10,b.wd10),
-    ws925:L(a.ws925,b.ws925),wd925:L(a.wd925,b.wd925),
-    ws850:L(a.ws850,b.ws850),wd850:L(a.wd850,b.wd850),
-    ws700:L(a.ws700,b.ws700),wd700:L(a.wd700,b.wd700),
-    ws500:L(a.ws500,b.ws500),wd500:L(a.wd500,b.wd500),
-    ws300:L(a.ws300,b.ws300),wd300:L(a.wd300,b.wd300),
-    cL:L(a.cL,b.cL),cM:L(a.cM,b.cM),cH:L(a.cH,b.cH),
-    wc:t<.5?a.wc:b.wc, cape:L(a.cape,b.cape),
-    fzM:L(a.fzM,b.fzM), precip:L(a.precip,b.precip),
-  };
+  const L=(x,y)=>(x==null?y:y==null?x:x*(1-t)+y*t);
+  const Ldir=(x,y)=>{let d=((y-x+540)%360)-180;return (x+d*t+360)%360;};
+  const out={_ok:a._ok&&b._ok};
+  // numéricos
+  ['T2m','Td2m','T925','T850','T700','T500','T300',
+   'RH925','RH850','RH700','RH500',
+   'ws10','ws925','ws850','ws700','ws500','ws300','gusts',
+   'h925','h850','h700','h500','h300',
+   'cL','cM','cH','cape','li','cin','fzM','precip','psfc','vis'
+  ].forEach(k=>out[k]=L(a[k],b[k]));
+  // direccionais
+  ['wd10','wd925','wd850','wd700','wd500','wd300'].forEach(k=>out[k]=Ldir(a[k],b[k]));
+  out.wc = t<0.5 ? a.wc : b.wc;
+  return out;
 }
 
 function degToComp(d){return['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSO','SO','OSO','O','ONO','NO','NNO'][Math.round(d/22.5)%16];}
@@ -1939,7 +2041,10 @@ async function doCalc(){
   const today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
   const depUTC=new Date(today.getTime()+depMin*60000);
 
-  const N=300, NW=14;   // 300 pontos → resolução ~1 km para rota de 300 NM
+  // Resolução dinâmica: ~1 ponto por NM (mín 100, máx 500); NW = 1 amostra met / ~15 NM
+  const _tmpDistEst = (function(){let d=0;for(let s=0;s<allInfos.length-1;s++)d+=hvNm(allInfos[s].lat,allInfos[s].lon,allInfos[s+1].lat,allInfos[s+1].lon);return d;})();
+  const N=Math.max(100, Math.min(500, Math.round(_tmpDistEst)));
+  const NW=Math.max(10, Math.min(40, Math.round(_tmpDistEst/15)));
   setSt('A calcular rota multi-segmento…','load');
 
   // Construir pontos ao longo de todos os segmentos
@@ -1963,51 +2068,124 @@ async function doCalc(){
   const dists=segDistsArr;
   const total=dists[dists.length-1];
 
-  // ── Elevações SRTM via Open-Elevation API (lotes de 100) ──
-  setSt('A obter perfil de terreno SRTM (Open-Elevation)…','load');
-  async function fetchElevBatch(locations){
-    const r=await fetch('https://api.open-elevation.com/api/v1/lookup',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({locations})
-    });
-    if(!r.ok) throw new Error('open-elev '+r.status);
-    const d=await r.json();
-    return d.results.map(p=>p.elevation);
+  // ── Perfil de terreno: cadeia de fontes + amostragem em corredor ─────────
+  // 1) Open-Meteo Elevation (Copernicus DEM 90 m, sem chave, batch 100)
+  // 2) OpenTopoData EU-DEM 25 m (Europa)         3) OpenTopoData SRTM 90 m global
+  // 4) Open-Elevation                            5) DEM local (Portugal continental)
+  setSt('A obter perfil de terreno (Open-Meteo Elevation)…','load');
+  const _elevCache=new Map();
+  async function elevOpenMeteo(locs){
+    // GET com lat,lon CSV; aceita até 100 coords por chamada
+    const out=[];
+    for(let i=0;i<locs.length;i+=100){
+      const chunk=locs.slice(i,i+100);
+      const lats=chunk.map(l=>l.latitude.toFixed(5)).join(',');
+      const lons=chunk.map(l=>l.longitude.toFixed(5)).join(',');
+      const url=`https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`;
+      const d=await fetchJSON(url,{},{timeout:10000,retries:1});
+      const arr=Array.isArray(d.elevation)?d.elevation:[d.elevation];
+      out.push(...arr);
+    }
+    return out;
+  }
+  async function elevOpenTopo(locs, dataset){
+    const out=[];
+    for(let i=0;i<locs.length;i+=100){
+      const chunk=locs.slice(i,i+100);
+      const csv=chunk.map(l=>l.latitude.toFixed(5)+','+l.longitude.toFixed(5)).join('|');
+      const url=`https://api.opentopodata.org/v1/${dataset}?locations=${csv}&interpolation=cubic`;
+      const d=await fetchJSON(url,{},{timeout:10000,retries:1});
+      out.push(...d.results.map(p=>p.elevation));
+    }
+    return out;
+  }
+  async function elevOpenElev(locs){
+    const out=[];
+    for(let i=0;i<locs.length;i+=100){
+      const chunk=locs.slice(i,i+100);
+      const d=await fetchJSON('https://api.open-elevation.com/api/v1/lookup',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({locations:chunk})
+      },{timeout:15000,retries:1});
+      out.push(...d.results.map(p=>p.elevation));
+    }
+    return out;
+  }
+  async function fetchElevsChain(locs){
+    const sources=[
+      ['Open-Meteo Elevation', elevOpenMeteo],
+      ['OpenTopoData EU-DEM', l=>elevOpenTopo(l,'eudem25m')],
+      ['OpenTopoData SRTM',   l=>elevOpenTopo(l,'srtm90m')],
+      ['Open-Elevation',      elevOpenElev],
+    ];
+    for(const [name,fn] of sources){
+      try{
+        const r=await fn(locs);
+        if(r && r.length===locs.length && r.every(v=>typeof v==='number' && isFinite(v))){
+          return {data:r, source:name};
+        }
+      }catch(e){ console.warn('Elev source falhou ['+name+']:', e.message); }
+    }
+    // Fallback final: DEM local (apenas dentro da caixa de Portugal)
+    return {data:locs.map(l=>{const v=demElev(l.latitude,l.longitude);return v==null?0:v;}), source:'DEM local'};
   }
 
-  let elevs;
-  try{
-    // Dividir em lotes de 100 pontos
-    const locs=pts.map(p=>({latitude:+p.lat.toFixed(5),longitude:+p.lon.toFixed(5)}));
-    const BATCH=100;
-    const batches=[];
-    for(let i=0;i<locs.length;i+=BATCH) batches.push(locs.slice(i,i+BATCH));
-    const results=await Promise.all(batches.map(b=>fetchElevBatch(b)));
-    const flat=results.flat();
-    elevs=pts.map((p,i)=>{
-      // Aeródromo de partida/chegada: usar elevação oficial
-      if(i===0) return dep.elv/3.28084;
-      if(i===pts.length-1) return arr.elv/3.28084;
-      for(let wi=1;wi<allInfos.length-1;wi++){
-        if(Math.abs(p.lat-allInfos[wi].lat)<0.01&&Math.abs(p.lon-allInfos[wi].lon)<0.01)
-          return allInfos[wi].elv/3.28084;
-      }
-      return Math.max(0, flat[i]??demElev(p.lat,p.lon));
+  // Amostragem em corredor: para cada ponto da rota, gerar offsets perpendiculares
+  // a ±1.5 NM e ±3 NM e tomar o MÁXIMO (capta picos fora da linha central)
+  function perpOffsets(lat,lon,brgDeg,nmList){
+    const R=3440.065;
+    const out=[{lat,lon}];
+    [brgDeg+90, brgDeg-90].forEach(b=>{
+      const brg=b*D2R;
+      nmList.forEach(nm=>{
+        const d=nm/R, la1=lat*D2R, lo1=lon*D2R;
+        const la2=Math.asin(Math.sin(la1)*Math.cos(d)+Math.cos(la1)*Math.sin(d)*Math.cos(brg));
+        const lo2=lo1+Math.atan2(Math.sin(brg)*Math.sin(d)*Math.cos(la1),Math.cos(d)-Math.sin(la1)*Math.sin(la2));
+        out.push({lat:la2*R2D, lon:lo2*R2D});
+      });
     });
-  } catch(e){
-    // Fallback: DEM embebido (baixa resolução)
-    console.warn('Open-Elevation indisponível, usando DEM local:',e);
-    setSt('⚠ Terreno local (API indisponível)…','load');
-    elevs=pts.map((p,i)=>{
-      if(i===0) return dep.elv/3.28084;
-      if(i===pts.length-1) return arr.elv/3.28084;
-      for(let wi=1;wi<allInfos.length-1;wi++){
-        if(Math.abs(p.lat-allInfos[wi].lat)<0.01&&Math.abs(p.lon-allInfos[wi].lon)<0.01)
-          return allInfos[wi].elv/3.28084;
-      }
-      return Math.max(0,demElev(p.lat,p.lon));
-    });
+    return out;
   }
+  function bearingDeg(la1,lo1,la2,lo2){
+    const φ1=la1*D2R, φ2=la2*D2R, Δλ=(lo2-lo1)*D2R;
+    const y=Math.sin(Δλ)*Math.cos(φ2);
+    const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+    return ((Math.atan2(y,x)*R2D)+360)%360;
+  }
+
+  // Construir lista alargada (centro + 4 offsets por ponto) e mapear índices
+  const corridorOffsets=[1.5, 3.0];
+  const samplesPerPt = 1 + 2*corridorOffsets.length; // 5
+  const allLocs=[];
+  const ptIndexRange=[];
+  for(let i=0;i<pts.length;i++){
+    const j = Math.min(i+1, pts.length-1), jp = Math.max(i-1, 0);
+    const brg = bearingDeg(pts[jp].lat, pts[jp].lon, pts[j].lat, pts[j].lon);
+    const off = perpOffsets(pts[i].lat, pts[i].lon, brg, corridorOffsets);
+    ptIndexRange.push([allLocs.length, allLocs.length+off.length]);
+    off.forEach(o=>allLocs.push({latitude:+o.lat.toFixed(5), longitude:+o.lon.toFixed(5)}));
+  }
+
+  const {data:elevAll, source:elevSrc}=await fetchElevsChain(allLocs);
+  window._elevSource=elevSrc;
+  setSt('Terreno: '+elevSrc+' ('+pts.length+' pts × '+samplesPerPt+')','load');
+
+  const elevs=pts.map((p,i)=>{
+    // Aeródromos partida/chegada: usar elevação oficial
+    if(i===0) return dep.elv/3.28084;
+    if(i===pts.length-1) return arr.elv/3.28084;
+    // Waypoints intermédios com elevação conhecida
+    for(let wi=1;wi<allInfos.length-1;wi++){
+      if(Math.abs(p.lat-allInfos[wi].lat)<0.01&&Math.abs(p.lon-allInfos[wi].lon)<0.01)
+        return allInfos[wi].elv/3.28084;
+    }
+    const [a,b]=ptIndexRange[i];
+    let mx=-Infinity;
+    for(let k=a;k<b;k++){ const v=elevAll[k]; if(typeof v==='number' && v>mx) mx=v; }
+    if(!isFinite(mx)) mx=0;
+    return Math.max(0, mx);
+  });
+
 
   setSt('A obter meteorologia multi-nível (Open-Meteo)…','load');
   const lastIdx=pts.length-1;
@@ -2019,7 +2197,8 @@ async function doCalc(){
   }));
   const wxMap={}; wxRes.forEach(({idx,w})=>wxMap[idx]=w);
   const wxKeys=Object.keys(wxMap).map(Number).sort((a,b)=>a-b);
-  const wxOk=wxRes.some(r=>r.w!==WX0&&r.w.cL!==0||r.w.T850!==8);
+  // wxOk: pelo menos uma amostra com flag _ok=true (não fallback WX0)
+  const wxOk=wxRes.some(r=>r.w && r.w._ok===true);
 
   setSt('A construir perfil…','load');
   const data=pts.map((pt,i)=>{
@@ -2110,7 +2289,8 @@ async function doCalc(){
     '  |  '+total.toFixed(1)+' NM'+
     '  |  ETE '+eteH+'h'+String(eteM).padStart(2,'0')+'m'+
     '  |  Score: '+score+'/100'+
-    (wxOk?'':'  ⚠ sem met (offline)'),
+    (wxOk?'':'  ⚠ sem met (offline)')+
+    '  |  Terreno: '+(window._elevSource||'?'),
     'ok'
   );
   btn.disabled=false;
