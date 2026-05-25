@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VFRSKY  — Ibéria GRAMET - v20 (METEO+Terreno reforçados) — Carlos Costa</title>
+<title>VFRSKY  — Ibéria GRAMET - v22 (mais rápido) — Carlos Costa</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -808,25 +808,58 @@ function demElev(lat,lon){
         +DEM[r0+1][c0]*dr*(1-dc)+DEM[r0+1][c0+1]*dr*dc;
 }
 
-// ── Fetch utilitário: timeout + retries com back-off exponencial ──
-async function fetchJSON(url, opts={}, {timeout=12000, retries=2}={}){
-  let lastErr;
-  for(let attempt=0; attempt<=retries; attempt++){
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(), timeout);
-    try{
-      const r=await fetch(url,{...opts, signal:ctrl.signal});
-      clearTimeout(tid);
-      if(!r.ok) throw new Error('HTTP '+r.status);
-      return await r.json();
-    }catch(e){
-      clearTimeout(tid);
-      lastErr=e;
-      if(attempt<retries) await new Promise(res=>setTimeout(res, 400*Math.pow(2,attempt)));
-    }
+// ── Fetch utilitário: timeout + retries + cache GET + concorrência limitada ──
+const _fetchCache=new Map();
+const _fetchInflight=new Map();
+async function fetchJSON(url, opts={}, {timeout=12000, retries=2, cache=true}={}){
+  const isGet = !opts.method || opts.method.toUpperCase()==='GET';
+  const key = isGet ? url : null;
+  if(cache && key){
+    if(_fetchCache.has(key)) return _fetchCache.get(key);
+    if(_fetchInflight.has(key)) return _fetchInflight.get(key);
   }
-  throw lastErr;
+  const req=(async()=>{
+    let lastErr;
+    for(let attempt=0; attempt<=retries; attempt++){
+      const ctrl=new AbortController();
+      const tid=setTimeout(()=>ctrl.abort(), timeout);
+      try{
+        const r=await fetch(url,{...opts, signal:ctrl.signal});
+        clearTimeout(tid);
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const j=await r.json();
+        if(cache && key) _fetchCache.set(key, j);
+        return j;
+      }catch(e){
+        clearTimeout(tid);
+        lastErr=e;
+        if(attempt<retries) await new Promise(res=>setTimeout(res, 250*Math.pow(2,attempt)));
+      }
+    }
+    throw lastErr;
+  })();
+  if(cache && key) _fetchInflight.set(key, req);
+  try{
+    return await req;
+  }finally{
+    if(key) _fetchInflight.delete(key);
+  }
 }
+// Executa tarefas async com limite de concorrência (mantém ordem nos resultados)
+async function pMapLimit(items, limit, fn){
+  const out=new Array(items.length);
+  let i=0;
+  const workers=Array.from({length:Math.min(limit,items.length)},async()=>{
+    while(true){
+      const idx=i++;
+      if(idx>=items.length) return;
+      out[idx]=await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 
 // ═══════════════════════════════════════════════════════════════════
 //  MATHS
@@ -2041,19 +2074,32 @@ async function doCalc(){
   const today=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()));
   const depUTC=new Date(today.getTime()+depMin*60000);
 
-  // Resolução dinâmica: ~1 ponto por NM (mín 100, máx 500); NW = 1 amostra met / ~15 NM
+  // Resolução dinâmica: amostras repartidas pela rota total, não repetidas por segmento
   const _tmpDistEst = (function(){let d=0;for(let s=0;s<allInfos.length-1;s++)d+=hvNm(allInfos[s].lat,allInfos[s].lon,allInfos[s+1].lat,allInfos[s+1].lon);return d;})();
-  const N=Math.max(100, Math.min(500, Math.round(_tmpDistEst)));
-  const NW=Math.max(10, Math.min(40, Math.round(_tmpDistEst/15)));
+  const routeStepNm = _tmpDistEst > 350 ? 3.0 : _tmpDistEst > 180 ? 2.4 : 2.0;
+  const N_TOTAL=Math.max(48, Math.min(160, Math.round(_tmpDistEst/routeStepNm)));
+  const NW=Math.max(6, Math.min(16, Math.round(_tmpDistEst/40)));
   setSt('A calcular rota multi-segmento…','load');
 
-  // Construir pontos ao longo de todos os segmentos
+  // Construir pontos ao longo de todos os segmentos com orçamento global de pontos
+  const segLengths=[];
+  for(let seg=0;seg<allInfos.length-1;seg++) segLengths.push(hvNm(allInfos[seg].lat,allInfos[seg].lon,allInfos[seg+1].lat,allInfos[seg+1].lon));
   const segPtsArr=[];
   const segDistsArr=[];
   let cumDist=0;
+  let usedBudget=0;
   for(let seg=0;seg<allInfos.length-1;seg++){
     const from=allInfos[seg], to=allInfos[seg+1];
-    const segPts=gcPts(from.lat,from.lon,to.lat,to.lon,N);
+    const segLen=segLengths[seg];
+    const remainingSegs=(allInfos.length-1)-seg;
+    let segBudget=(seg===allInfos.length-2)
+      ? Math.max(2, N_TOTAL-usedBudget)
+      : Math.max(2, Math.round(N_TOTAL*(segLen/Math.max(_tmpDistEst,1))));
+    if(segBudget > N_TOTAL-usedBudget-(remainingSegs-1)*2){
+      segBudget=Math.max(2, N_TOTAL-usedBudget-(remainingSegs-1)*2);
+    }
+    usedBudget+=segBudget;
+    const segPts=gcPts(from.lat,from.lon,to.lat,to.lon,segBudget);
     const segDs=segPts.map(p=>hvNm(from.lat,from.lon,p.lat,p.lon)+cumDist);
     if(seg===0){
       segPtsArr.push(...segPts);
@@ -2069,47 +2115,44 @@ async function doCalc(){
   const total=dists[dists.length-1];
 
   // ── Perfil de terreno: cadeia de fontes + amostragem em corredor ─────────
-  // 1) Open-Meteo Elevation (Copernicus DEM 90 m, sem chave, batch 100)
-  // 2) OpenTopoData EU-DEM 25 m (Europa)         3) OpenTopoData SRTM 90 m global
-  // 4) Open-Elevation                            5) DEM local (Portugal continental)
+  // Batches paralelos (concorrência 6) → muito mais rápido que sequencial
   setSt('A obter perfil de terreno (Open-Meteo Elevation)…','load');
-  const _elevCache=new Map();
+  const CHUNK=100, CONC=6;
+  function chunkify(locs){
+    const out=[]; for(let i=0;i<locs.length;i+=CHUNK) out.push(locs.slice(i,i+CHUNK));
+    return out;
+  }
   async function elevOpenMeteo(locs){
-    // GET com lat,lon CSV; aceita até 100 coords por chamada
-    const out=[];
-    for(let i=0;i<locs.length;i+=100){
-      const chunk=locs.slice(i,i+100);
+    const chunks=chunkify(locs);
+    const res=await pMapLimit(chunks, CONC, async chunk=>{
       const lats=chunk.map(l=>l.latitude.toFixed(5)).join(',');
       const lons=chunk.map(l=>l.longitude.toFixed(5)).join(',');
       const url=`https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`;
       const d=await fetchJSON(url,{},{timeout:10000,retries:1});
-      const arr=Array.isArray(d.elevation)?d.elevation:[d.elevation];
-      out.push(...arr);
-    }
-    return out;
+      return Array.isArray(d.elevation)?d.elevation:[d.elevation];
+    });
+    return res.flat();
   }
   async function elevOpenTopo(locs, dataset){
-    const out=[];
-    for(let i=0;i<locs.length;i+=100){
-      const chunk=locs.slice(i,i+100);
+    const chunks=chunkify(locs);
+    const res=await pMapLimit(chunks, CONC, async chunk=>{
       const csv=chunk.map(l=>l.latitude.toFixed(5)+','+l.longitude.toFixed(5)).join('|');
       const url=`https://api.opentopodata.org/v1/${dataset}?locations=${csv}&interpolation=cubic`;
       const d=await fetchJSON(url,{},{timeout:10000,retries:1});
-      out.push(...d.results.map(p=>p.elevation));
-    }
-    return out;
+      return d.results.map(p=>p.elevation);
+    });
+    return res.flat();
   }
   async function elevOpenElev(locs){
-    const out=[];
-    for(let i=0;i<locs.length;i+=100){
-      const chunk=locs.slice(i,i+100);
+    const chunks=chunkify(locs);
+    const res=await pMapLimit(chunks, CONC, async chunk=>{
       const d=await fetchJSON('https://api.open-elevation.com/api/v1/lookup',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({locations:chunk})
-      },{timeout:15000,retries:1});
-      out.push(...d.results.map(p=>p.elevation));
-    }
-    return out;
+      },{timeout:15000,retries:1,cache:false});
+      return d.results.map(p=>p.elevation);
+    });
+    return res.flat();
   }
   async function fetchElevsChain(locs){
     const sources=[
@@ -2126,15 +2169,14 @@ async function doCalc(){
         }
       }catch(e){ console.warn('Elev source falhou ['+name+']:', e.message); }
     }
-    // Fallback final: DEM local (apenas dentro da caixa de Portugal)
     return {data:locs.map(l=>{const v=demElev(l.latitude,l.longitude);return v==null?0:v;}), source:'DEM local'};
   }
 
-  // Amostragem em corredor: para cada ponto da rota, gerar offsets perpendiculares
-  // a ±1.5 NM e ±3 NM e tomar o MÁXIMO (capta picos fora da linha central)
+  // Amostragem em corredor: offsets perpendiculares (±1.5/±3 NM) APENAS a cada
+  // CORR_STEP pontos da rota → reduz drasticamente nº de coords sem perder picos
   function perpOffsets(lat,lon,brgDeg,nmList){
     const R=3440.065;
-    const out=[{lat,lon}];
+    const out=[];
     [brgDeg+90, brgDeg-90].forEach(b=>{
       const brg=b*D2R;
       nmList.forEach(nm=>{
@@ -2153,33 +2195,41 @@ async function doCalc(){
     return ((Math.atan2(y,x)*R2D)+360)%360;
   }
 
-  // Construir lista alargada (centro + 4 offsets por ponto) e mapear índices
-  const corridorOffsets=[1.5, 3.0];
-  const samplesPerPt = 1 + 2*corridorOffsets.length; // 5
+  // Sempre centro em todos os pts; offsets só a cada CORR_STEP (~3 NM)
+  const corridorOffsets = total > 250 ? [2.0] : total > 120 ? [1.5, 3.0] : [1.5, 3.0];
+  const CORR_STEP = total > 250 ? 3 : total > 120 ? 2 : 1;
   const allLocs=[];
-  const ptIndexRange=[];
+  const ptCenterIdx=[];   // índice em allLocs do ponto central de cada pt
+  const ptOffsetIdx=[];   // [start,end) dos offsets associados (centro inclusivo)
   for(let i=0;i<pts.length;i++){
-    const j = Math.min(i+1, pts.length-1), jp = Math.max(i-1, 0);
-    const brg = bearingDeg(pts[jp].lat, pts[jp].lon, pts[j].lat, pts[j].lon);
-    const off = perpOffsets(pts[i].lat, pts[i].lon, brg, corridorOffsets);
-    ptIndexRange.push([allLocs.length, allLocs.length+off.length]);
-    off.forEach(o=>allLocs.push({latitude:+o.lat.toFixed(5), longitude:+o.lon.toFixed(5)}));
+    const center={latitude:+pts[i].lat.toFixed(5), longitude:+pts[i].lon.toFixed(5)};
+    const cIdx=allLocs.length;
+    allLocs.push(center);
+    ptCenterIdx.push(cIdx);
+    let endIdx=cIdx+1;
+    if(i%CORR_STEP===0){
+      const j = Math.min(i+1, pts.length-1), jp = Math.max(i-1, 0);
+      const brg = bearingDeg(pts[jp].lat, pts[jp].lon, pts[j].lat, pts[j].lon);
+      const off = perpOffsets(pts[i].lat, pts[i].lon, brg, corridorOffsets);
+      off.forEach(o=>allLocs.push({latitude:+o.lat.toFixed(5), longitude:+o.lon.toFixed(5)}));
+      endIdx=allLocs.length;
+    }
+    ptOffsetIdx.push([cIdx, endIdx]);
   }
+
 
   const {data:elevAll, source:elevSrc}=await fetchElevsChain(allLocs);
   window._elevSource=elevSrc;
-  setSt('Terreno: '+elevSrc+' ('+pts.length+' pts × '+samplesPerPt+')','load');
+  setSt('Terreno: '+elevSrc+' ('+pts.length+' pts, corredor a cada '+CORR_STEP+')','load');
 
   const elevs=pts.map((p,i)=>{
-    // Aeródromos partida/chegada: usar elevação oficial
     if(i===0) return dep.elv/3.28084;
     if(i===pts.length-1) return arr.elv/3.28084;
-    // Waypoints intermédios com elevação conhecida
     for(let wi=1;wi<allInfos.length-1;wi++){
       if(Math.abs(p.lat-allInfos[wi].lat)<0.01&&Math.abs(p.lon-allInfos[wi].lon)<0.01)
         return allInfos[wi].elv/3.28084;
     }
-    const [a,b]=ptIndexRange[i];
+    const [a,b]=ptOffsetIdx[i];
     let mx=-Infinity;
     for(let k=a;k<b;k++){ const v=elevAll[k]; if(typeof v==='number' && v>mx) mx=v; }
     if(!isFinite(mx)) mx=0;
@@ -2187,14 +2237,19 @@ async function doCalc(){
   });
 
 
+
   setSt('A obter meteorologia multi-nível (Open-Meteo)…','load');
   const lastIdx=pts.length-1;
-  const wxIdxs=Array.from({length:NW},(_,i2)=>Math.min(Math.round(i2*lastIdx/(NW-1)),lastIdx));
-  const wxRes=await Promise.all(wxIdxs.map(idx=>{
+  const wxIdxs=[...new Set(Array.from({length:Math.max(2,NW)},(_,i2)=>Math.min(Math.round(i2*lastIdx/Math.max(1,(NW-1))),lastIdx)))];
+  const wxRes=await pMapLimit(wxIdxs, 6, async idx=>{
     const etaDt=new Date(today.getTime()+(depMin+(dists[idx]/speed)*60)*60000);
-    return getWx(pts[idx].lat,pts[idx].lon,etaDt)
-      .then(w=>({idx,w})).catch(()=>({idx,w:WX0}));
-  }));
+    try{
+      const w=await getWx(pts[idx].lat,pts[idx].lon,etaDt);
+      return {idx,w};
+    }catch{
+      return {idx,w:WX0};
+    }
+  });
   const wxMap={}; wxRes.forEach(({idx,w})=>wxMap[idx]=w);
   const wxKeys=Object.keys(wxMap).map(Number).sort((a,b)=>a-b);
   // wxOk: pelo menos uma amostra com flag _ok=true (não fallback WX0)
