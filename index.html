@@ -208,7 +208,7 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
   <div class="row2">
     <div class="field"><label>Vel. (kt)</label>
       <input type="number" id="speed" value="100" min="40" max="500"></div>
-    <div class="field"><label>Alt. CRZ (ft)</label>
+    <div class="field"><label>Alt. CRZ Leg 1 (ft)</label>
       <input type="number" id="cruise" value="4500" min="500" max="25000" step="500"></div>
   </div>
   <button class="btn" id="calcBtn" onclick="doCalc()">▶ Calcular GRAMET</button>
@@ -267,6 +267,10 @@ tbody tr:hover td{background:rgba(0,0,0,.04)}
   <div class="view active" id="view-gramet">
     <div class="gramet-wrap">
       <canvas id="cvMain"></canvas>
+      <div id="safetyBox" style="display:none;background:#fff;border:1.5px solid #c8137a;border-left:6px solid #c8137a;padding:10px 14px;font-family:'Share Tech Mono',monospace;font-size:.78rem;line-height:1.5;color:#2a3c50;margin-top:4px">
+        <div style="font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:2px;color:#c8137a;font-size:.82rem;margin-bottom:6px">▸ ANÁLISE BASE NUVENS  vs  CRUZEIRO</div>
+        <div id="safetyBody"></div>
+      </div>
       <div class="twrap" id="tableWrap">
         <table>
           <thead><tr>
@@ -1174,9 +1178,18 @@ const PLEVS=[
   {hPa:700,lbl:'FL100'},{hPa:500,lbl:'FL180'},{hPa:300,lbl:'FL300'},
 ];
 
-function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos){
+function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos, legInfo){
   // allInfos = [dep, ...wpts, arr]  (compatível com chamadas antigas sem este arg)
   if(!allInfos) allInfos=[depInfo,arrInfo];
+  // legInfo opcional: { legBoundaries:[d0,d1,...,dN], legCruises:[c1,...,cN], legMSA:[m1,...,mN] }
+  // Se omitido, comportamento legado (cruzeiro/MSA únicos).
+  const _hasLeg = legInfo && Array.isArray(legInfo.legBoundaries) && legInfo.legCruises && legInfo.legCruises.length>=1;
+  function _crzForDist(d){
+    if(!_hasLeg) return crzFt;
+    const lb=legInfo.legBoundaries;
+    for(let i=0;i<lb.length-1;i++) if(d<=lb[i+1]+1e-6) return legInfo.legCruises[i];
+    return legInfo.legCruises[legInfo.legCruises.length-1];
+  }
   // HiDPI / Retina: escalar o canvas para resolução real do ecrã (min 2x p/ máxima nitidez)
   const dpr=Math.max(2, window.devicePixelRatio||1);
   const cssW=cv.clientWidth||cv.offsetWidth||900;
@@ -1355,41 +1368,95 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos){
       const bf=Math.max(pt.ef+aglRaw, pt.ef+100);        // base MSL (ft) — nunca abaixo do terreno
       const agl=bf-pt.ef;
       const hasCloud=(pt.wx.cL+pt.wx.cM+pt.wx.cH)>15;
-      return {x:X(pt.dist), y:Yft(bf), bf, agl, hasCloud};
+      const cType=pt.wx.wc>=95?'CB':pt.wx.wc>=80?'Cu/CB':pt.wx.cL>30?'St/Sc/Cu':pt.wx.cM>30?'Ac/As':'Ci/Cs';
+      const cCov=Math.max(Math.round(pt.wx.cL),Math.round(pt.wx.cM),Math.round(pt.wx.cH));
+      return {x:X(pt.dist), y:Yft(bf), bf, agl, hasCloud, cType, cCov, dist:pt.dist};
     });
 
     ctx.save();
 
-    // (a) Halo branco por baixo para destacar do fundo das nuvens
-    ctx.strokeStyle='rgba(255,255,255,0.9)';
-    ctx.lineWidth=5;
-    ctx.setLineDash([]);
+    // (z) Banda de conflito CRZ vs BASE — pintada quando o cruzeiro está
+    //     ACIMA ou A MENOS DE 500 ft da base das nuvens (risco IMC/VMC marginal)
     {
-      let inC=false;
-      for(let i=0;i<cbPts.length;i++){
-        const p=cbPts[i];
-        if(!p.hasCloud){ inC=false; continue; }
-        if(!inC){ ctx.beginPath(); ctx.moveTo(p.x,p.y); inC=true; }
-        else ctx.lineTo(p.x,p.y);
-        if(i===cbPts.length-1||!cbPts[i+1].hasCloud) ctx.stroke();
+      for(let i=0;i<cbPts.length-1;i++){
+        const a=cbPts[i], b=cbPts[i+1];
+        if(!a.hasCloud||!b.hasCloud) continue;
+        const cA=_crzForDist(a.dist!==undefined?a.dist:(data[i]?data[i].dist:0));
+        const cB=_crzForDist(b.dist!==undefined?b.dist:(data[i+1]?data[i+1].dist:0));
+        const yCrzA=Yft(cA), yCrzB=Yft(cB);
+        const margA=a.bf-cA, margB=b.bf-cB;
+        // pintar quando margem < 500 ft (negativo = cruzeiro DENTRO/ACIMA das nuvens)
+        if(margA<500||margB<500){
+          const isIMC=(margA<0||margB<0);
+          ctx.fillStyle=isIMC?'rgba(204,34,34,0.22)':'rgba(255,170,0,0.18)';
+          ctx.beginPath();
+          ctx.moveTo(a.x, Math.min(a.y,yCrzA));
+          ctx.lineTo(b.x, Math.min(b.y,yCrzB));
+          ctx.lineTo(b.x, Math.max(b.y,yCrzB));
+          ctx.lineTo(a.x, Math.max(a.y,yCrzA));
+          ctx.closePath();
+          ctx.fill();
+        }
       }
     }
 
-    // (b) Linha principal — magenta tracejada, espessura 2.5
-    ctx.strokeStyle='#c8137a';
-    ctx.lineWidth=2.5;
-    ctx.setLineDash([7,3]);
+    // (a) Halo branco grosso por baixo — destaca a linha sobre qualquer fundo
+    ctx.strokeStyle='rgba(255,255,255,0.95)';
+    ctx.lineWidth=7;
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(cbPts[0].x, cbPts[0].y);
+    for(let i=1;i<cbPts.length;i++) ctx.lineTo(cbPts[i].x, cbPts[i].y);
+    ctx.stroke();
+
+    // (b) Linha principal — magenta saturado, GROSSA e CONTÍNUA ao longo
+    //     de TODO o percurso (mesmo onde a cobertura é baixa, mas atenuada).
+    //     Onde há nuvens significativas (>15%) fica em vermelho-magenta sólido;
+    //     onde a cobertura é baixa fica tracejada e mais clara.
     {
+      // Segmento "com nuvens" — sólido, espessura 4
+      ctx.strokeStyle='#e6007a';
+      ctx.lineWidth=4;
+      ctx.setLineDash([]);
       let inC=false;
       for(let i=0;i<cbPts.length;i++){
         const p=cbPts[i];
-        if(!p.hasCloud){ inC=false; continue; }
+        if(!p.hasCloud){ if(inC){ ctx.stroke(); inC=false; } continue; }
         if(!inC){ ctx.beginPath(); ctx.moveTo(p.x,p.y); inC=true; }
         else ctx.lineTo(p.x,p.y);
-        if(i===cbPts.length-1||!cbPts[i+1].hasCloud) ctx.stroke();
       }
+      if(inC) ctx.stroke();
+
+      // Segmento "sem nuvens significativas" — tracejado fino, magenta claro
+      ctx.strokeStyle='rgba(230,0,122,0.45)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([4,4]);
+      inC=false;
+      for(let i=0;i<cbPts.length;i++){
+        const p=cbPts[i];
+        if(p.hasCloud){ if(inC){ ctx.stroke(); inC=false; } continue; }
+        if(!inC){ ctx.beginPath(); ctx.moveTo(p.x,p.y); inC=true; }
+        else ctx.lineTo(p.x,p.y);
+      }
+      if(inC) ctx.stroke();
+      ctx.setLineDash([]);
     }
-    ctx.setLineDash([]);
+
+    // (b2) Rótulo fixo da linha (à esquerda do gráfico)
+    {
+      const yL=cbPts[0].y;
+      ctx.font='bold 10px "Share Tech Mono"';
+      const lbl='BASE NUVENS';
+      const tw=ctx.measureText(lbl).width;
+      ctx.fillStyle='rgba(255,255,255,0.95)';
+      ctx.fillRect(pL+2, yL-14, tw+8, 13);
+      ctx.strokeStyle='#e6007a'; ctx.lineWidth=1;
+      ctx.strokeRect(pL+2, yL-14, tw+8, 13);
+      ctx.fillStyle='#c8137a'; ctx.textAlign='left'; ctx.textBaseline='top';
+      ctx.fillText(lbl, pL+6, yL-12);
+      ctx.textBaseline='alphabetic';
+    }
 
     // (c) Etiquetas — limpas e legíveis, espaçadas para não se sobreporem
     //     Formato em duas linhas: "3700 ft" / "1200 AGL"
@@ -1405,11 +1472,12 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos){
       ctx.beginPath(); ctx.moveTo(p.x,p.y-3); ctx.lineTo(p.x,p.y+3); ctx.stroke();
       if(p.x-_lastLblX < MIN_GAP) continue;
       _lastLblX=p.x;
+      const l0 = p.cType+' '+p.cCov+'%';
       const l1 = r50(p.bf)+' ft';
       const l2 = r50(p.agl)+' AGL';
       ctx.font='bold 9px "Share Tech Mono"';
-      const tw=Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width);
-      const boxW=tw+8, boxH=22;
+      const tw=Math.max(ctx.measureText(l0).width, ctx.measureText(l1).width, ctx.measureText(l2).width);
+      const boxW=tw+10, boxH=33;
       const lx=p.x, ly=p.y-boxH-3;
       // Conector do tick à caixa
       ctx.strokeStyle='rgba(160,20,100,0.55)';
@@ -1420,13 +1488,15 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos){
       ctx.strokeStyle='#c8137a';
       ctx.lineWidth=0.8;
       ctx.strokeRect(lx-boxW/2, ly, boxW, boxH);
-      // Texto
-      ctx.fillStyle='#a0145a';
+      // Texto — tipo de nuvem + cobertura (topo, azul), base MSL (magenta), AGL (cinza)
       ctx.textAlign='center';
       ctx.textBaseline='top';
-      ctx.fillText(l1, lx, ly+2);
+      ctx.fillStyle='#1a3fa0';
+      ctx.fillText(l0, lx, ly+2);
+      ctx.fillStyle='#a0145a';
+      ctx.fillText(l1, lx, ly+12);
       ctx.fillStyle='#6b6b6b';
-      ctx.fillText(l2, lx, ly+11);
+      ctx.fillText(l2, lx, ly+22);
       ctx.textBaseline='alphabetic';
     }
     ctx.restore();
@@ -1559,26 +1629,57 @@ function drawGRAMET(cv, data, depInfo, arrInfo, crzFt, depUTC, allInfos){
   // 8. MSA line
   const maxEF=Math.max(...data.map(d=>d.ef));
   const msaFt=maxEF+1000;
-  ctx.beginPath(); ctx.setLineDash([7,4]);
-  ctx.moveTo(pL,Yft(msaFt)); ctx.lineTo(W-pR,Yft(msaFt));
-  ctx.strokeStyle='rgba(255,59,59,.75)'; ctx.lineWidth=1.3; ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle='rgba(255,59,59,.8)'; ctx.font='bold 8px "Share Tech Mono"'; ctx.textAlign='left';
-  ctx.fillText('MSA '+Math.round(msaFt)+'ft',pL+4,Yft(msaFt)-4);
+  // ── Linhas escalonadas por perna ────────────────────────────────────
+  // Constrói lista de pernas: usa legInfo se existir, senão uma única perna
+  const _legs = _hasLeg
+    ? legInfo.legBoundaries.slice(0,-1).map((d0,i)=>({d0, d1:legInfo.legBoundaries[i+1], crz:legInfo.legCruises[i], msa:legInfo.legMSA?legInfo.legMSA[i]:msaFt}))
+    : [{d0:data[0].dist, d1:data[data.length-1].dist, crz:crzFt, msa:msaFt}];
 
-  // 9. Cruise path (purple — como autorouter)
+  // 8. MSA line (vermelho tracejado, escalonado por perna)
+  ctx.setLineDash([7,4]);
+  ctx.strokeStyle='rgba(255,59,59,.75)'; ctx.lineWidth=1.3;
   ctx.beginPath();
-  ctx.moveTo(X(data[0].dist),Yft(crzFt));
-  data.forEach(d=>ctx.lineTo(X(d.dist),Yft(crzFt)));
-  ctx.strokeStyle='#8800cc'; ctx.lineWidth=2.2; ctx.stroke();
+  _legs.forEach((lg,i)=>{
+    const x0=X(lg.d0), x1=X(lg.d1), y=Yft(lg.msa);
+    ctx.moveTo(x0,y); ctx.lineTo(x1,y);
+    if(i<_legs.length-1){
+      // degrau vertical na fronteira
+      const yNext=Yft(_legs[i+1].msa);
+      ctx.moveTo(x1,y); ctx.lineTo(x1,yNext);
+    }
+  });
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='rgba(255,59,59,.85)'; ctx.font='bold 8px "Share Tech Mono"'; ctx.textAlign='left';
+  _legs.forEach((lg,i)=>{
+    const x0=X(lg.d0);
+    ctx.fillText('MSA '+Math.round(lg.msa)+'ft'+(_legs.length>1?' L'+(i+1):''),x0+4,Yft(lg.msa)-4);
+  });
+
+  // 9. Cruise path (roxo, escalonado por perna)
+  ctx.strokeStyle='#8800cc'; ctx.lineWidth=2.2; ctx.lineJoin='round';
+  ctx.beginPath();
+  _legs.forEach((lg,i)=>{
+    const x0=X(lg.d0), x1=X(lg.d1), y=Yft(lg.crz);
+    if(i===0) ctx.moveTo(x0,y); else ctx.lineTo(x0,y);
+    ctx.lineTo(x1,y);
+  });
+  ctx.stroke();
+  // etiqueta por perna
   ctx.font='bold 10px "Share Tech Mono"';
-  const _crzLbl='CRZ FL'+String(Math.round(crzFt/100)).padStart(3,'0');
-  const _crzW=ctx.measureText(_crzLbl).width;
-  ctx.fillStyle='rgba(255,255,255,0.88)'; ctx.fillRect(W-pR-_crzW-6,Yft(crzFt)-13,_crzW+5,12);
-  ctx.fillStyle='#7700bb'; ctx.textAlign='right';
-  ctx.fillText(_crzLbl,W-pR-3,Yft(crzFt)-3);
-  // Plane icon
+  _legs.forEach((lg,i)=>{
+    const lbl='CRZ FL'+String(Math.round(lg.crz/100)).padStart(3,'0')+(_legs.length>1?' L'+(i+1):'');
+    const w=ctx.measureText(lbl).width;
+    const xMid=(X(lg.d0)+X(lg.d1))/2;
+    const xLbl=Math.min(W-pR-3, Math.max(pL+w+8, xMid+w/2));
+    ctx.fillStyle='rgba(255,255,255,0.88)';
+    ctx.fillRect(xLbl-w-3, Yft(lg.crz)-13, w+5, 12);
+    ctx.fillStyle='#7700bb'; ctx.textAlign='right';
+    ctx.fillText(lbl, xLbl, Yft(lg.crz)-3);
+  });
+  // Plane icon na 1ª perna
   ctx.font='14px serif'; ctx.textAlign='center'; ctx.fillStyle='#8800cc';
-  ctx.fillText('✈',W/2,Yft(crzFt)+5);
+  const _midL0=(X(_legs[0].d0)+X(_legs[0].d1))/2;
+  ctx.fillText('✈',_midL0,Yft(_legs[0].crz)+5);
 
 
   // 9b. Espaço Aéreo no perfil
@@ -1973,11 +2074,16 @@ function addWaypoint(){
   div.id=id+'-row';
   div.style.cssText='display:flex;gap:4px;align-items:center';
   div.innerHTML=`
-    <div class="field" style="flex:1;margin:0">
+    <div class="field" style="flex:1.6;margin:0">
       <label style="font-size:.48rem;color:var(--dim);letter-spacing:1px">WPT ${_wptCount}</label>
       <input type="text" id="${id}" maxlength="12" placeholder="ICAO/lat,lon" list="adlist"
         autocomplete="off" oninput="onBadgeWpt('${id}')"
         style="background:#f0f4fa;border:1px solid var(--border);color:#1a2c40;padding:5px 8px;font-family:'Share Tech Mono',monospace;font-size:.82rem;letter-spacing:2px;outline:none;width:100%;text-transform:uppercase">
+    </div>
+    <div class="field" style="flex:1;margin:0">
+      <label style="font-size:.48rem;color:var(--dim);letter-spacing:1px">CRZ Leg ${_wptCount+1} (ft)</label>
+      <input type="number" id="${id}-crz" placeholder="4500" min="500" max="25000" step="500"
+        style="background:#f0f4fa;border:1px solid var(--border);color:#1a2c40;padding:5px 8px;font-family:'Share Tech Mono',monospace;font-size:.78rem;letter-spacing:1px;outline:none;width:100%">
     </div>
     <button onclick="removeWaypoint('${id}-row')" title="Remover"
       style="background:rgba(200,30,30,.08);border:1px solid rgba(200,30,30,.4);color:#cc2222;padding:4px 7px;font-size:.7rem;cursor:pointer;margin-top:14px;flex-shrink:0;font-family:'Share Tech Mono',monospace">✕</button>`;
@@ -1986,12 +2092,36 @@ function addWaypoint(){
 function removeWaypoint(rowId){
   const el=document.getElementById(rowId);
   if(el) el.remove();
-  // Renumerar labels
-  [...document.querySelectorAll('#wpt-list .field label')].forEach((l,i)=>{l.textContent='WPT '+(i+1);});
+  // Renumerar labels (cada row tem 2 labels: WPT n e CRZ Leg n+1)
+  const rows=[...document.querySelectorAll('#wpt-list > div')];
+  rows.forEach((r,i)=>{
+    const labs=r.querySelectorAll('label');
+    if(labs[0]) labs[0].textContent='WPT '+(i+1);
+    if(labs[1]) labs[1].textContent='CRZ Leg '+(i+2)+' (ft)';
+  });
 }
 function getWaypointValues(){
   return [...document.querySelectorAll('#wpt-list input[type=text]')]
     .map(i=>i.value.trim()).filter(v=>v.length>0);
+}
+// Devolve array de cruzeiros para cada perna (N waypoints → N+1 pernas)
+// globalCrz aplica-se à perna 1 (dep → wpt1 ou dep → arr).
+// Para pernas seguintes, usa o input CRZ do waypoint que inicia essa perna;
+// se vazio, propaga o último valor válido.
+function getLegCruises(globalCrz){
+  const rows=[...document.querySelectorAll('#wpt-list > div')];
+  const out=[globalCrz];
+  let last=globalCrz;
+  rows.forEach(r=>{
+    const txt=r.querySelector('input[type=text]');
+    if(!txt || !txt.value.trim()) return; // wpt vazio: ignora
+    const crzEl=r.querySelector('input[type=number]');
+    const v=crzEl ? parseFloat(crzEl.value) : NaN;
+    const crz=(!isNaN(v) && v>=500) ? v : last;
+    out.push(crz);
+    last=crz;
+  });
+  return out;
 }
 function onBadgeWpt(id){}
 
@@ -2088,6 +2218,7 @@ async function doCalc(){
   const segDistsArr=[];
   let cumDist=0;
   let usedBudget=0;
+  const legBoundaries=[0]; // distâncias cumulativas em cada waypoint
   for(let seg=0;seg<allInfos.length-1;seg++){
     const from=allInfos[seg], to=allInfos[seg+1];
     const segLen=segLengths[seg];
@@ -2109,6 +2240,7 @@ async function doCalc(){
       segDistsArr.push(...segDs.slice(1));
     }
     cumDist=segDs[segDs.length-1];
+    legBoundaries.push(cumDist);
   }
   const pts=segPtsArr;
   const dists=segDistsArr;
@@ -2266,6 +2398,22 @@ async function doCalc(){
   // Stats
   const maxEF=Math.max(...data.map(d=>d.ef));
   const msaFt=maxEF+1000;
+  // ── Per-leg cruise & MSA ─────────────────────────────────────────────
+  const legCruises=getLegCruises(cruise); // length = #legs (= wptInfos.length+1)
+  function legIdxAt(d){
+    for(let i=0;i<legBoundaries.length-1;i++){
+      if(d<=legBoundaries[i+1]+1e-6) return i;
+    }
+    return legBoundaries.length-2;
+  }
+  const legMaxEF=legCruises.map(()=>0);
+  data.forEach(p=>{const li=legIdxAt(p.dist); if(p.ef>legMaxEF[li]) legMaxEF[li]=p.ef;});
+  const legMSA=legMaxEF.map(ef=>ef+1000);
+  // cruzeiro/MSA por ponto (usado em análises e tabela)
+  const crzAt=data.map(p=>legCruises[legIdxAt(p.dist)]);
+  const msaAt=data.map(p=>legMSA[legIdxAt(p.dist)]);
+  // Margem mínima global (pior perna)
+  const worstMarg=Math.min(...legCruises.map((c,i)=>c-legMSA[i]));
   const ete=(total/speed)*60;
   const eteH=Math.floor(ete/60), eteM=Math.round(ete%60);
   const etaH=Math.floor((depMin+ete)/60)%24, etaMi=Math.round((depMin+ete)%60);
@@ -2281,7 +2429,12 @@ async function doCalc(){
   document.getElementById('sEte').textContent=eteH+'h '+String(eteM).padStart(2,'0')+'m';
   document.getElementById('sEta').textContent=String(etaH).padStart(2,'0')+':'+String(etaMi).padStart(2,'0')+' UTC';
   document.getElementById('sMaxT').textContent=Math.round(maxEF)+' ft';
-  document.getElementById('sMsa').textContent=Math.round(msaFt)+' ft';
+  // Mostra MSA por perna se houver mais que uma
+  if(legMSA.length===1){
+    document.getElementById('sMsa').textContent=Math.round(legMSA[0])+' ft';
+  } else {
+    document.getElementById('sMsa').textContent=legMSA.map((m,i)=>'L'+(i+1)+':'+Math.round(m)).join(' / ')+' ft';
+  }
   document.getElementById('sFz').textContent=Math.round(m2ft(avgFz))+' ft ('+Math.round(avgFz)+' m)';
   document.getElementById('sScore').textContent=score+'/100';
   document.getElementById('statsWrap').style.display='block';
@@ -2292,9 +2445,14 @@ async function doCalc(){
   sb.style.display='block';
 
   // Warnings
-  if(cruise<msaFt) document.getElementById('warnMsa').style.display='block';
+  const violLegs=legCruises.map((c,i)=>({i,c,m:legMSA[i]})).filter(o=>o.c<o.m);
+  if(violLegs.length){
+    const wm=document.getElementById('warnMsa');
+    wm.textContent='⚠ CRZ abaixo da MSA na(s) perna(s) '+violLegs.map(o=>(o.i+1)+' (CRZ '+o.c+' < MSA '+Math.round(o.m)+')').join(', ')+' — risco de colisão!';
+    wm.style.display='block';
+  }
   let hasIce=false;
-  for(const pt of data){if(icingAtFt(pt.wx,cruise)){hasIce=true;break;}}
+  for(let i=0;i<data.length;i++){if(icingAtFt(data[i].wx,crzAt[i])){hasIce=true;break;}}
   if(hasIce) document.getElementById('warnIce').style.display='block';
   const maxCape=Math.max(...wxSamples.map(w=>w.cape||0));
   if(maxCape>1000) document.getElementById('warnCb').style.display='block';
@@ -2305,13 +2463,14 @@ async function doCalc(){
   data.forEach((pt,i)=>{
     if(i%8!==0&&i!==data.length-1) return;
     const es=String(pt.etaDt.getUTCHours()).padStart(2,'0')+':'+String(pt.etaDt.getUTCMinutes()).padStart(2,'0');
-    const wc=windAtAlt(pt.wx,cruise);
+    const ptCrz=crzAt[i];
+    const wc=windAtAlt(pt.wx,ptCrz);
     const sp2=Math.max(0,pt.wx.T2m-pt.wx.Td2m);
     const aglFt=Math.max(100,Math.round((sp2*400)/100)*100);
     const baseFt=pt.ef+aglFt; // MSL — coerente com a linha do gráfico
     const hasCloud=(pt.wx.cL+pt.wx.cM+pt.wx.cH)>15;
     if(!hasCloud) return;
-    const icing=icingAtFt(pt.wx,cruise)?'❄ SIM':'—';
+    const icing=icingAtFt(pt.wx,ptCrz)?'❄ SIM':'—';
     const cloudType=pt.wx.wc>=95?'CB':pt.wx.wc>=80?'Cu/CB':pt.wx.cL>30?'St/Sc/Cu':pt.wx.cM>30?'Ac/As':'Ci/Cs';
     const tr=document.createElement('tr');
     tr.innerHTML=
@@ -2329,12 +2488,72 @@ async function doCalc(){
   });
   if(rows>0) document.getElementById('tableWrap').style.display='block';
 
+  // ─── Análise de segurança: base das nuvens vs cruzeiro ───
+  {
+    const samples=data.map((pt,i)=>{
+      const sp2=Math.max(0,(pt.wx.T2m||15)-(pt.wx.Td2m||10));
+      const aglRaw=Math.round((sp2*400)/100)*100;
+      const bf=Math.max(pt.ef+aglRaw, pt.ef+100);
+      const cov=pt.wx.cL+pt.wx.cM+pt.wx.cH;
+      return {dist:pt.dist, bf, agl:bf-pt.ef, cov, hasCloud:cov>15, ef:pt.ef, crz:crzAt[i], leg:legIdxAt(pt.dist)};
+    });
+    const withC=samples.filter(s=>s.hasCloud);
+    const lines=[];
+    // Resumo cruzeiros por perna
+    if(legCruises.length>1){
+      lines.push('<b>Cruzeiro por perna:</b> '+legCruises.map((c,i)=>'<span style="color:#8800cc;font-weight:bold">L'+(i+1)+' '+c+' ft</span>').join(' · ')+'   |   <b>MSA:</b> '+legMSA.map((m,i)=>'L'+(i+1)+' '+Math.round(m)).join(' · ')+' ft');
+    }
+    if(withC.length===0){
+      lines.push('<span style="color:#008a45;font-weight:bold">✓ CÉU LIMPO ao longo do percurso</span> — sem cobertura significativa (&gt;15%). Voo VFR favorável.');
+    } else {
+      const minBase=Math.min(...withC.map(s=>s.bf));
+      const minAGL=Math.min(...withC.map(s=>s.agl));
+      const avgBase=Math.round(withC.reduce((a,s)=>a+s.bf,0)/withC.length);
+      const imc=samples.filter(s=>s.hasCloud&&s.bf<s.crz);
+      const marg=samples.filter(s=>s.hasCloud&&s.bf>=s.crz&&s.bf-s.crz<500);
+      const ok =samples.filter(s=>s.hasCloud&&s.bf-s.crz>=500);
+      const pct=n=>Math.round(100*n/samples.length);
+      const imcSeg=imc.length?imc[0].dist.toFixed(0)+'–'+imc[imc.length-1].dist.toFixed(0)+' NM':null;
+
+      lines.push('<b>Base média:</b> <span style="color:#c8137a;font-weight:bold">'+avgBase+' ft MSL</span>   |   <b>Mínima:</b> '+Math.round(minBase)+' ft ('+Math.round(minAGL)+' AGL)');
+
+      if(imc.length){
+        const imcLegs=[...new Set(imc.map(s=>s.leg+1))].join(', ');
+        lines.push('<span style="color:#cc2222;font-weight:bold">✖ RISCO IMC</span> — cruzeiro <b>ACIMA</b> da base das nuvens em <b>'+pct(imc.length)+'%</b> do percurso ('+imcSeg+', perna(s) '+imcLegs+'). Voo VFR <b>NÃO SEGURO</b>: descer abaixo de '+Math.round(minBase-200)+' ft na(s) perna(s) afectada(s), contornar, ou requalificar para IFR.');
+      }
+      if(marg.length){
+        const margLegs=[...new Set(marg.map(s=>s.leg+1))].join(', ');
+        lines.push('<span style="color:#c47a00;font-weight:bold">⚠ MARGEM CRÍTICA</span> — em <b>'+pct(marg.length)+'%</b> da rota (perna(s) '+margLegs+') a base fica a menos de 500 ft acima do cruzeiro. Considerar baixar cruzeiro nessa(s) perna(s) para <b>'+(Math.round((minBase-700)/500)*500)+' ft</b> ou inferior.');
+      }
+      if(ok.length && !imc.length && !marg.length){
+        lines.push('<span style="color:#008a45;font-weight:bold">✓ MARGEM ADEQUADA</span> — base das nuvens ≥ 500 ft acima do cruzeiro em toda a rota com cobertura. VFR viável.');
+      }
+
+      // Comentário sobre AGL absoluta
+      if(minAGL<1000){
+        lines.push('<span style="color:#c47a00">⚠ Tecto baixo localizado:</span> base AGL mínima de <b>'+Math.round(minAGL)+' ft</b> — atenção a obstáculos, antenas e relevo. Em zona montanhosa pode obrigar a desvio.');
+      } else if(minAGL<2000){
+        lines.push('Tecto moderado (mín. '+Math.round(minAGL)+' ft AGL). VFR possível mas com pouca margem para manobra vertical.');
+      } else {
+        lines.push('<span style="color:#008a45">Tecto confortável</span> (mín. '+Math.round(minAGL)+' ft AGL) — boa visibilidade vertical para VFR.');
+      }
+
+      // Tipo dominante
+      const lowDom=withC.filter(s=>s.cov>30).length;
+      if(lowDom>withC.length*0.6){
+        lines.push('Cobertura predominantemente <b>estratiforme</b> — base regular, sem actividade convectiva esperada do GRAMET. Atenção a chuvisco e gelo em ar húmido próximo dos 0°C.');
+      }
+    }
+    document.getElementById('safetyBody').innerHTML=lines.map(l=>'• '+l).join('<br>');
+    document.getElementById('safetyBox').style.display='block';
+  }
+
   // Draw GRAMET
   setSt('A renderizar GRAMET…','load');
   const cv=document.getElementById('cvMain');
-  drawGRAMET(cv,data,dep,arr,cruise,depUTC,allInfos);
+  drawGRAMET(cv,data,dep,arr,cruise,depUTC,allInfos,{legBoundaries,legCruises,legMSA});
   // Guardar contexto p/ re-renderizar em resize
-  window._gramArgs={data,dep,arr,cruise,depUTC,allInfos};
+  window._gramArgs={data,dep,arr,cruise,depUTC,allInfos,legInfo:{legBoundaries,legCruises,legMSA}};
 
   // Draw map route
   drawMapRoute(allInfos, speed);
@@ -2765,7 +2984,7 @@ window.addEventListener('resize',()=>{
   _resizeT=setTimeout(()=>{
     if(window._gramArgs){
       const cv=document.getElementById('cvMain');
-      if(cv) drawGRAMET(cv,_gramArgs.data,_gramArgs.dep,_gramArgs.arr,_gramArgs.cruise,_gramArgs.depUTC,_gramArgs.allInfos);
+      if(cv) drawGRAMET(cv,_gramArgs.data,_gramArgs.dep,_gramArgs.arr,_gramArgs.cruise,_gramArgs.depUTC,_gramArgs.allInfos,_gramArgs.legInfo);
     }
     if(window._map){
       _map.invalidateSize();
